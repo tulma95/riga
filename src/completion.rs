@@ -1,6 +1,6 @@
 //! Completion providers have no terminal or UI dependencies. Ranges count Unicode scalars, as ZLE does.
 use crate::{
-    background,
+    ai, background,
     protocol::State,
     sources::Env,
     spec::{self, Arg, Spec, Value, ValueSpec},
@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_RESULTS: usize = 64;
+/// Kind of an informational row (AI progress); accepting it never edits the buffer.
+pub const STATUS: &str = "status";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
     pub label: String,
@@ -233,6 +235,8 @@ struct SpecContext<'a> {
     options: bool,
     positionals: usize,
     cwd: Option<PathBuf>,
+    /// A word the spec doesn't know (flag or subcommand) disabled it.
+    unknown: bool,
 }
 impl<'a> SpecContext<'a> {
     fn new(spec: Option<&'a Spec>, previous: &[String], cwd: &Path) -> Self {
@@ -246,6 +250,7 @@ impl<'a> SpecContext<'a> {
             options: true,
             positionals: 0,
             cwd: Some(cwd.into()),
+            unknown: false,
         };
         let Some(spec) = spec else {
             return result;
@@ -275,6 +280,7 @@ impl<'a> SpecContext<'a> {
                 } else {
                     // An unknown option might consume the next word: do not guess its arity.
                     result.enabled = false;
+                    result.unknown = true;
                 }
             } else {
                 let command = &spec.commands[result.command];
@@ -284,6 +290,7 @@ impl<'a> SpecContext<'a> {
                     result.visible = spec.visible_flags(child);
                 } else if !command.children.is_empty() && command.args.is_empty() {
                     result.enabled = false;
+                    result.unknown = true;
                 } else {
                     result.enabled = !result.arg().is_some_and(|arg| arg.stop);
                     result.positionals += 1;
@@ -412,6 +419,8 @@ pub struct Engine {
     /// Bundled specs apply only to commands found on the shell's PATH.
     installed_only: bool,
     runs: background::Runs,
+    /// Natural language to command; on unless the daemon's environment has `RIGA_AI=0`.
+    ai: Option<ai::Ai>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -420,6 +429,7 @@ impl Default for Engine {
             std::env::var_os("HOME").unwrap_or_default().into(),
         );
         engine.installed_only = true;
+        engine.ai = (std::env::var("RIGA_AI").as_deref() != Ok("0")).then(ai::Ai::default);
         engine
     }
 }
@@ -434,6 +444,7 @@ impl Engine {
             filesystem: true,
             installed_only: false,
             runs: background::Runs::default(),
+            ai: None,
         }
     }
     fn scan_path(&mut self) {
@@ -484,20 +495,48 @@ impl Engine {
             .collect()
     }
     /// Called from a background thread when a tool-run value source has new results.
+    /// Model runs announce themselves the same way.
     pub fn on_background_update(&mut self, f: impl Fn(&background::Key) + Send + Sync + 'static) {
-        self.runs.on_update(f);
+        let f = std::sync::Arc::new(f);
+        let g = f.clone();
+        self.runs.on_update(move |k| f(k));
+        if let Some(ai) = &mut self.ai {
+            ai.on_update(move |k| g(k));
+        }
     }
-    /// Tool runs that the completions since the last call were waiting on.
+    /// Tool and model runs that the completions since the last call were waiting on.
     pub fn take_background_wanted(&self) -> Vec<background::Key> {
-        self.runs.take_wanted()
+        let mut keys = self.runs.take_wanted();
+        keys.extend(self.ai.iter().flat_map(ai::Ai::take_wanted));
+        keys
     }
     pub fn background_running(&self, key: &background::Key) -> bool {
-        self.runs.is_running(key)
+        match (&self.ai, key.1.first()) {
+            (Some(ai), Some(prompt)) if key.0 == ai::KEY => ai.pending(prompt),
+            _ => self.runs.is_running(key),
+        }
     }
     pub fn background_busy(&self) -> bool {
-        self.runs.busy()
+        self.runs.busy() || self.ai.as_ref().is_some_and(ai::Ai::busy)
     }
     pub fn complete(&mut self, state: &State) -> Vec<Suggestion> {
+        let effective_path = std::env::join_paths(std::env::split_paths(&state.path).map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                state.cwd.join(p)
+            }
+        }))
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+        if self.path != effective_path {
+            self.path = effective_path;
+            self.scanned = Instant::now() - Duration::from_secs(60);
+        }
+        if let Some(request) = ai::request(&state.buffer) {
+            return self.ai_complete(state, request);
+        }
         let Some(c) = context(&state.buffer, state.cursor) else {
             return vec![];
         };
@@ -514,20 +553,6 @@ impl Engine {
             end: c.end,
         };
         let command = c.previous.is_empty();
-        let effective_path = std::env::join_paths(std::env::split_paths(&state.path).map(|p| {
-            if p.is_absolute() {
-                p
-            } else {
-                state.cwd.join(p)
-            }
-        }))
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-        if self.path != effective_path {
-            self.path = effective_path;
-            self.scanned = Instant::now() - Duration::from_secs(60);
-        }
         if command && !c.prefix.contains('/') && !c.prefix.starts_with('~') {
             self.scan_path();
             for name in &self.executables {
@@ -693,6 +718,79 @@ impl Engine {
         out.dedup_by(|a, b| a.insert == b.insert);
         out.truncate(MAX_RESULTS);
         out
+    }
+    /// Model suggestions for `# request`, replacing the whole buffer. Until they are ready, or if
+    /// none is usable, one `status` row says why; accepting it only closes the popup.
+    fn ai_complete(&mut self, state: &State, request: &str) -> Vec<Suggestion> {
+        if self.ai.is_none() {
+            return vec![];
+        }
+        let tools = self.spec_status();
+        let directory = state.cwd.file_name().unwrap_or_default().to_string_lossy();
+        let prompt = ai::prompt(request, &directory, &tools);
+        let end = state.buffer.chars().count();
+        let status = |label: &str, description: &str| {
+            vec![Suggestion {
+                label: label.into(),
+                kind: STATUS,
+                description: description.into(),
+                insert: String::new(),
+                start: 0,
+                end,
+            }]
+        };
+        let commands = match self.ai.as_ref().and_then(|ai| ai.get(&prompt)) {
+            None => return status("Asking the on-device model…", "AI · Takes a few seconds"),
+            Some(None) => {
+                return status(
+                    "The on-device model didn't answer",
+                    "AI · Check Apple Intelligence and `fm available`",
+                );
+            }
+            Some(Some(commands)) => commands,
+        };
+        let mut out: Vec<Suggestion> = vec![];
+        for c in commands {
+            if out.iter().any(|s| s.insert == c.command)
+                || !self.valid_command(&c.command, &state.cwd)
+            {
+                continue;
+            }
+            let explanation: String = c
+                .explanation
+                .chars()
+                .filter(|&c| !spec::deceptive(c))
+                .collect();
+            out.push(Suggestion {
+                label: c.command.clone(),
+                kind: "ai",
+                description: format!("AI · {explanation}"),
+                // A whole command line, inserted as-is: quoting it would make it one word.
+                insert: c.command,
+                start: 0,
+                end,
+            });
+        }
+        if out.is_empty() {
+            return status("No usable command", "AI · Try rewording the request");
+        }
+        out
+    }
+    /// Lexable, not denied, every command on PATH and, where a spec exists, only words it knows.
+    fn valid_command(&self, line: &str, cwd: &Path) -> bool {
+        let Some(segments) = ai::segments(line) else {
+            return false;
+        };
+        !segments.is_empty()
+            && !ai::denied(&segments, line)
+            && segments.iter().all(|words| {
+                let first = &words[0];
+                !first.contains('=')
+                    && self.executables.binary_search(first).is_ok()
+                    && self
+                        .spec(first)
+                        .is_none_or(|spec| !SpecContext::new(Some(spec), words, cwd).unknown)
+            })
     }
     fn files(&self, c: &Context, cwd: &Path, only_dirs: bool, out: &mut Vec<Suggestion>) {
         let (parent, prefix) = match c.prefix.rsplit_once('/') {
@@ -974,6 +1072,101 @@ command t "Test tool"
         let mut engine = Engine::new(String::new(), root.clone());
         assert!(labels(&mut engine, "git checkout ", &root).contains(&"file".into()));
         assert_eq!(labels(&mut engine, "docker build d", &root), vec!["dir/"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn ai_suggestions_are_validated_and_replace_the_whole_buffer() {
+        let root = std::env::temp_dir().join(format!("riga-ai-{}", std::process::id()));
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        for tool in ["git", "lsof", "grep", "sudo"] {
+            fs::write(bin.join(tool), "").unwrap();
+            fs::set_permissions(bin.join(tool), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let reply = [
+            ("lsof -iTCP -sTCP:LISTEN | grep x", "Listening ports"),
+            ("git status --short", r"Short status \u202e"),
+            ("git status --bogus", "Unknown flag"),
+            ("git frobnicate", "Unknown subcommand"),
+            ("nosuchtool -x", "Not on PATH"),
+            (r"ls\nrm x", "Newline"),
+            ("sudo lsof", "Denied"),
+            ("lsof -i > ports.txt", "Redirect"),
+        ]
+        .map(|(c, e)| format!(r#"{{"command":"{c}","explanation":"{e}"}}"#))
+        .join(",");
+        let prompts = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        let p = prompts.clone();
+        let mut engine = Engine::new(String::new(), root.clone());
+        engine.ai = Some(ai::Ai::with_backend(move |prompt| {
+            p.lock().unwrap().push(prompt.to_owned());
+            Some(format!(r#"{{"commands":[{reply}]}}"#))
+        }));
+        let (tx, rx) = std::sync::mpsc::channel();
+        engine.on_background_update(move |k| tx.send(k.clone()).unwrap());
+        let buffer = "# list ports é🌍 now";
+        let state = State {
+            session: "s".into(),
+            pane: "p".into(),
+            revision: 1,
+            cursor: 3,
+            cwd: root.join("proj"),
+            buffer: buffer.into(),
+            path: bin.to_string_lossy().into_owned(),
+        };
+        let waiting = engine.complete(&state);
+        assert_eq!(
+            (waiting.len(), waiting[0].kind),
+            (1, STATUS),
+            "progress while the model runs"
+        );
+        let key = engine.take_background_wanted().pop().unwrap();
+        assert!(engine.background_running(&key));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), key);
+        assert!(!engine.background_running(&key));
+        let prompt = &prompts.lock().unwrap()[0];
+        assert!(prompt.contains("list ports é🌍 now") && prompt.contains("directory name: proj"));
+        assert!(prompt.contains("Installed tools: git"), "{prompt}");
+        let items = engine.complete(&state);
+        let got: Vec<_> = items
+            .iter()
+            .map(|s| (s.insert.as_str(), s.description.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("lsof -iTCP -sTCP:LISTEN | grep x", "AI · Listening ports"),
+                ("git status --short", "AI · Short status "),
+            ]
+        );
+        assert!(
+            items
+                .iter()
+                .all(|s| (s.start, s.end) == (0, 19) && s.kind == "ai")
+        );
+        // Failures say so instead of leaving the popup empty.
+        for (reply, label) in [
+            (None, "The on-device model didn't answer"),
+            (
+                Some(r#"{"commands":[{"command":"sudo lsof","explanation":"x"}]}"#),
+                "No usable command",
+            ),
+        ] {
+            engine.ai = Some(ai::Ai::with_backend(move |_| reply.map(str::to_owned)));
+            let (tx, rx) = std::sync::mpsc::channel();
+            engine.on_background_update(move |_| tx.send(()).unwrap());
+            assert_eq!(engine.complete(&state)[0].kind, STATUS);
+            rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            let items = engine.complete(&state);
+            assert_eq!(
+                (items.len(), items[0].label.as_str(), items[0].kind),
+                (1, label, STATUS)
+            );
+            assert!(items[0].insert.is_empty());
+        }
+        // Turned off (`RIGA_AI=0`): `#` lines stay silent.
+        engine.ai = None;
+        assert!(engine.complete(&state).is_empty());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

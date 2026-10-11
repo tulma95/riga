@@ -178,6 +178,19 @@ def check_zle(tmp):
         reply(f"I\t{before[3]}\t0\t18\t" + encode(insertion))
         state(insertion, len(insertion))
         assert not marker.exists(), "completion executed command"
+        # A `# request` line: an AI command replaces the whole buffer and is never executed.
+        ai_marker = tmp / "ai-must-not-exist"
+        prompt = "# make a marker file here 🌍"
+        send("\x15" + prompt)
+        request = state(prompt, len(prompt))
+        command = "touch " + shlex.quote(str(ai_marker)) + " && echo done"
+        reply(f"P\t{request[3]}\t1")
+        send("\t")
+        expect("A", lambda f: f[3] == "accept")
+        reply(f"I\t{request[3]}\t0\t{len(prompt)}\t" + encode(command))
+        state(command, len(command))
+        drain(0.3)
+        assert not ai_marker.exists(), "AI suggestion executed"
         # Reload must discard saved macro metadata before capturing a new widget.
         source = shlex.quote(str(ROOT / "shell/riga.zsh"))
         send("\x15riga-unload; bindkey -s '^N' 'macro-original'; source " + source + "\n")

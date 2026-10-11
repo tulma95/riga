@@ -17,6 +17,14 @@ Type `git st`, `cd ` or the prefix of a command. The server must remain running.
 
 While `riga serve` is running, a terminal icon appears in the macOS menu bar. Click it to see the running status or choose **Quit Riga**. The icon disappears when the server exits. Diagnostic commands (`doctor` and `probe`) do not add an icon.
 
+## Natural language to command
+
+On by default. To turn it off, set `RIGA_AI=0` in the environment of `riga serve` (for example `RIGA_AI=0 "$RIGA_BIN" serve &`); `#` lines then show no popup. It is a daemon setting rather than a shell setting because the daemon runs the model, and keeping it there leaves the shell protocol unchanged. Requirements: Apple Intelligence enabled on a supported Mac, and the `fm` license accepted once with `sudo fm license`. If the model is unavailable, the popup says so.
+
+A line that starts with `# ` followed by at least three words is a request. About 400 ms after the last keystroke, Riga asks the on-device model (`/usr/bin/fm respond --model system --greedy`, with guided generation) for up to three commands. Only one run is in flight at a time, and a run is killed after 8 seconds. The prompt contains the request, the current directory's name and the names of installed tools that have bundled specs. It never contains file contents or history. The prompt goes to `fm` on stdin, so it doesn't appear in `ps`. Prompts and replies are kept only in a 32-entry in-memory cache and are never logged.
+
+Before a suggestion is shown, Riga's own lexer must accept it (no newlines, substitutions, unquoted globs or redirects). Every command in it must be on the shell's PATH, and a command with a bundled spec may use only the subcommands and flags that spec knows. Suggestions containing `sudo`, `rm -rf`, `dd`, `mkfs`, `diskutil` or a pipe into a shell are dropped. Accepting replaces the whole line, as typed, without running it. While the model runs, the popup shows one row, "Asking the on-device model…". If the model doesn't answer (Apple Intelligence off, `fm` license not accepted, timeout) or no suggestion passes the checks, that row changes to say so. Accepting one of these rows only closes the popup.
+
 ## Permissions
 
 The first Automation query may prompt to control iTerm2. In **System Settings → Privacy & Security → Accessibility**, allow the application responsible for launching Riga (for this terminal workflow, iTerm2). Restart Riga if necessary. Under **Automation**, allow that launcher to control iTerm2. These are separate permissions.
@@ -65,11 +73,11 @@ AppKit points are converted from AX's top-left coordinate system into the primar
 
 The parser handles ordinary commands, quoted/escaped paths, Unicode scalar offsets, command separators and middle-of-token replacement. It deliberately suppresses substitutions, unquoted globbing, redirects, assignments and other unsupported syntax rather than inventing replacement ranges. It does not resolve aliases or functions, named-user tilde expansion, shell expansions or remote sessions. tmux is supported only as a tool to complete (`tmux ...` commands), not as a pane host. Non-UTF-8 filenames are skipped. New files in a directory appear on the next edit. Executable discovery has a 30-second cache and each directory scan is capped at 20,000 entries. Results are capped at 64 with seven rows visible.
 
-No command buffers are logged or persisted. Local IPC is protected by a `0700` parent and `0600` socket. Other processes running as your own user are within this prototype's trust boundary. Shell frames are capped at 64 KiB. Buffers above 16,384 characters suppress completion. Disconnection reconnects at the next command prompt. The server is manually started. There is no background agent installation, update service, cloud account, telemetry or global key monitor.
+No command buffers are logged or persisted. Local IPC is protected by a `0700` parent and `0600` socket. Other processes running as your own user are within this prototype's trust boundary. Shell frames are capped at 64 KiB. Buffers above 16,384 characters suppress completion. Disconnection reconnects at the next command prompt. The server is manually started. There is no background agent installation, update service, cloud account, telemetry or global key monitor. AI suggestions are on-device only.
 
 ## Not yet verified live
 
-Live checks passed on one Retina display with iTerm2 3.7.2. Still unverified: multiline paste, reverse search, visual widths of non-CJK Unicode, focus changes into settings/search and terminal text selection, full-screen apps, multiple displays (mixed scaling, negative origins, fullscreen Spaces), and revoking permissions mid-edit. Focus tracking polls about every 70 ms, so focus transitions have finite detection latency.
+Live checks passed on one Retina display with iTerm2 3.7.2. Still unverified: multiline paste, reverse search, visual widths of non-CJK Unicode, focus changes into settings/search and terminal text selection, full-screen apps, multiple displays (mixed scaling, negative origins, fullscreen Spaces), and revoking permissions mid-edit. Focus tracking polls about every 70 ms, so focus transitions have finite detection latency. AI suggestions were checked live only on macOS 27.0.1 with one Apple Silicon Mac. Requests are expected in English. Still unverified: Apple Intelligence turned off or still downloading.
 
 ## Tests
 

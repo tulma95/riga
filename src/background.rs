@@ -6,7 +6,7 @@
 //! group which is killed and reaped when the run ends, so no descendant outlives it.
 use std::{
     collections::HashMap,
-    io::Read,
+    io::{Read, Write},
     os::unix::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
@@ -65,7 +65,7 @@ pub struct Runs {
 }
 impl Default for Runs {
     fn default() -> Self {
-        Self::with_exec(|path, argv| run(path, argv, TIMEOUT))
+        Self::with_exec(|path, argv| run(path, argv, None, TIMEOUT))
     }
 }
 impl Runs {
@@ -195,20 +195,35 @@ fn kill_group(pgid: u32) {
     }
 }
 /// Output of a successful run within `timeout`; `None` if missing, failing, slow or oversized.
+/// `input` is written to stdin (private data never goes in argv, which `ps` shows).
 /// The child leads its own process group, which is always killed and the child reaped before
 /// returning; the reader thread ends once the group is dead (its pipe closes).
-fn run(path: &str, argv: &[String], timeout: Duration) -> Option<Vec<String>> {
+pub(crate) fn run(
+    path: &str,
+    argv: &[String],
+    input: Option<&str>,
+    timeout: Duration,
+) -> Option<Vec<String>> {
     let (program, args) = argv.split_first()?;
     let mut child = Command::new(resolve(path, program)?)
         .args(args)
         .env("PATH", path)
         .process_group(0)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
     let pgid = child.id();
+    // A writer thread, so a child that never reads cannot stall us past the timeout.
+    if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
+        let input = input.to_owned();
+        thread::spawn(move || stdin.write_all(input.as_bytes()));
+    }
     let Some(stdout) = child.stdout.take() else {
         kill_group(pgid);
         let _ = child.wait();
@@ -360,13 +375,18 @@ mod tests {
         );
         let t = Duration::from_secs(30);
         assert_eq!(
-            run(&path, &["fake-tool".into()], t).unwrap(),
+            run(&path, &["fake-tool".into()], None, t).unwrap(),
             ["one\ttab", "two"]
         );
-        assert!(run(&path, &["missing-tool".into()], t).is_none());
-        assert!(run("relative/dir", &["fake-tool".into()], t).is_none());
+        assert!(run(&path, &["missing-tool".into()], None, t).is_none());
+        fs::write(root.join("fake-tool"), "#!/bin/sh\nexec /bin/cat\n").unwrap();
+        assert_eq!(
+            run(&path, &["fake-tool".into()], Some("from\nstdin"), t).unwrap(),
+            ["from", "stdin"]
+        );
+        assert!(run("relative/dir", &["fake-tool".into()], None, t).is_none());
         fs::write(root.join("fake-tool"), "#!/bin/sh\nexit 3\n").unwrap();
-        assert!(run(&path, &["fake-tool".into()], t).is_none());
+        assert!(run(&path, &["fake-tool".into()], None, t).is_none());
         fs::remove_dir_all(root).unwrap();
     }
     fn alive(needle: &str) -> bool {
@@ -383,7 +403,15 @@ mod tests {
         // The shell forks `sleep` (the trailing `true` prevents an exec) and waits for it.
         let (root, path) = tool_dir("orphan", &format!("#!/bin/sh\n/bin/sleep {secs}\ntrue\n"));
         let start = Instant::now();
-        assert!(run(&path, &["fake-tool".into()], Duration::from_millis(300)).is_none());
+        assert!(
+            run(
+                &path,
+                &["fake-tool".into()],
+                None,
+                Duration::from_millis(300)
+            )
+            .is_none()
+        );
         assert!(start.elapsed() < Duration::from_secs(20));
         let sleep_cmd = format!("sleep {secs}");
         let gone = (0..200).any(|_| {

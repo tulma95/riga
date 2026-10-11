@@ -1,6 +1,6 @@
 # Riga
 
-Terminal autocomplete for macOS, zsh and iTerm2 only: a Rust daemon plus `shell/riga.zsh`, with a native popup at the terminal caret. Everything runs locally: no accounts, cloud, telemetry or AI. Only bundled specs (`data/specs/`) are supported, never user-supplied ones.
+Terminal autocomplete for macOS, zsh and iTerm2 only: a Rust daemon plus `shell/riga.zsh`, with a native popup at the terminal caret. Everything runs locally: no accounts, cloud or telemetry. The only AI is the `# request` feature (`src/ai.rs`, on by default, off with `RIGA_AI=0`), and it uses on-device models only: never cloud, Private Cloud Compute or a network API. Only bundled specs (`data/specs/`) are supported, never user-supplied ones.
 
 ## Invariants
 
@@ -12,6 +12,7 @@ Terminal autocomplete for macOS, zsh and iTerm2 only: a Rust daemon plus `shell/
 - Shell bindings work normally while the popup is hidden; loading, unloading and reloading restore widgets and macros.
 - Replacement ranges are Unicode character offsets, not bytes. Inserted words are shell-escaped.
 - Value sources read files when the data is on disk. When a tool holds useful data only at runtime (tmux, ffmpeg, docker, ...), run it with fixed, read-only arguments through `src/background.rs`: never in the shell, never blocking completion. Never run `git`: repository config and hooks can execute code, and its data is readable from files.
+- Model output is untrusted: show a suggestion only after `Engine::valid_command` accepts it (lexes, not denied, on PATH, known to its spec). Prompts go on stdin, never argv.
 - Never log or persist command buffers. IPC stays private and messages bounded.
 
 ## Checks

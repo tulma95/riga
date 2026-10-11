@@ -360,6 +360,11 @@ fn serve() -> io::Result<()> {
                                 s.visible = false;
                                 send(&mut clients, id, format!("P\t{revision}\t0\n"));
                             }
+                            "accept" if s.items[s.selected].kind == completion::STATUS => {
+                                s.dismissed = true;
+                                s.visible = false;
+                                send(&mut clients, id, format!("P\t{revision}\t0\n"));
+                            }
                             "accept" => {
                                 let item = &s.items[s.selected];
                                 send(
@@ -501,10 +506,10 @@ fn complete(args: &[String]) -> io::Result<()> {
         let _ = tx.send(());
     });
     let mut items = engine.complete(&state);
-    // A one-shot run has no next keystroke: wait (up to 4 s) for background tool runs to finish,
+    // A one-shot run has no next keystroke: wait (up to 10 s, for a model run) for background tool runs to finish,
     // then retry. Each finished run sends a notification after clearing its busy flag.
     if engine.background_busy() {
-        let deadline = Instant::now() + Duration::from_secs(4);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while engine.background_busy() {
             let left = deadline.saturating_duration_since(Instant::now());
             if rx.recv_timeout(left).is_err() {

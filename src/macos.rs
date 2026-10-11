@@ -222,6 +222,7 @@ fn kind_style(kind: &str) -> (&'static str, u32) {
         "flag" => ("−", 0x62c6d8),
         "value" => ("◆", 0xb998ff),
         "ref" => ("⎇", 0xf2a65e),
+        "status" => ("…", 0xa7afbc),
         _ => ("›", 0x86d08a),
     }
 }
