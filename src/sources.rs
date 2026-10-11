@@ -1,25 +1,80 @@
-//! The built-in value sources a `.riga` spec can name (`<git-branch>`, `<git-ref>`, ...): one
+//! The built-in value sources a `.riga` spec can name (`<git-branch>`, `<cargo-package>`, ...): one
 //! token table, and exhaustive dispatch and path rules. Sources read local files and never depend
 //! on the spec model.
-use crate::{git, names::Ref};
+use crate::{brew, cargo_toml, git, kube, names::Ref, npm, ollama, pyproject, rustup, vscode};
 use std::path::Path;
 /// Everything a source may consult; all of it comes from the request or the engine, never from the
 /// daemon's own environment, so sources are injectable and testable.
 pub struct Env<'a> {
     pub cwd: &'a Path,
     pub home: &'a Path,
-    /// The shell's PATH.
+    /// The shell's PATH, for sources that locate a tool (`brew`).
     pub path: &'a str,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Git(git::Kind),
+    Npm(npm::Kind),
+    Cargo(cargo_toml::Kind),
+    Py(pyproject::Kind),
+    Brew(brew::Kind),
+    Kube(kube::Kind),
+    Ollama,
+    Rustup(rustup::Kind),
+    Vscode(vscode::Kind),
 }
 /// Spec value tokens (`<token>`) and their sources.
 const TOKENS: &[(&str, Source)] = &[
     ("git-branch", Source::Git(git::Kind::Branch)),
     ("git-ref", Source::Git(git::Kind::Ref)),
     ("git-remote", Source::Git(git::Kind::Remote)),
+    ("npm-script", Source::Npm(npm::Kind::Script)),
+    ("npm-dependency", Source::Npm(npm::Kind::Dependency)),
+    ("npm-bin", Source::Npm(npm::Kind::Bin)),
+    ("npm-workspace", Source::Npm(npm::Kind::Workspace)),
+    ("cargo-package", Source::Cargo(cargo_toml::Kind::Package)),
+    (
+        "cargo-lock-package",
+        Source::Cargo(cargo_toml::Kind::LockPackage),
+    ),
+    ("cargo-bin", Source::Cargo(cargo_toml::Kind::Bin)),
+    ("cargo-example", Source::Cargo(cargo_toml::Kind::Example)),
+    ("cargo-test", Source::Cargo(cargo_toml::Kind::Test)),
+    ("cargo-bench", Source::Cargo(cargo_toml::Kind::Bench)),
+    ("cargo-feature", Source::Cargo(cargo_toml::Kind::Feature)),
+    (
+        "cargo-dependency",
+        Source::Cargo(cargo_toml::Kind::Dependency),
+    ),
+    ("cargo-profile", Source::Cargo(cargo_toml::Kind::Profile)),
+    (
+        "cargo-installed",
+        Source::Cargo(cargo_toml::Kind::Installed),
+    ),
+    ("py-dependency", Source::Py(pyproject::Kind::Dependency)),
+    ("py-group", Source::Py(pyproject::Kind::Group)),
+    ("py-extra", Source::Py(pyproject::Kind::Extra)),
+    ("py-script", Source::Py(pyproject::Kind::Script)),
+    ("uv-tool", Source::Py(pyproject::Kind::Tool)),
+    ("brew-package", Source::Brew(brew::Kind::Package)),
+    ("brew-formula", Source::Brew(brew::Kind::Formula)),
+    ("brew-installed", Source::Brew(brew::Kind::Installed)),
+    (
+        "brew-installed-formula",
+        Source::Brew(brew::Kind::InstalledFormula),
+    ),
+    ("brew-pinned", Source::Brew(brew::Kind::Pinned)),
+    ("brew-tap", Source::Brew(brew::Kind::Tap)),
+    ("kube-context", Source::Kube(kube::Kind::Context)),
+    ("kube-cluster", Source::Kube(kube::Kind::Cluster)),
+    ("kube-user", Source::Kube(kube::Kind::User)),
+    ("kube-namespace", Source::Kube(kube::Kind::Namespace)),
+    ("ollama-model", Source::Ollama),
+    ("rustup-toolchain", Source::Rustup(rustup::Kind::Toolchain)),
+    ("rustup-target", Source::Rustup(rustup::Kind::Target)),
+    ("rustup-component", Source::Rustup(rustup::Kind::Component)),
+    ("vscode-extension", Source::Vscode(vscode::Kind::Extension)),
+    ("vscode-profile", Source::Vscode(vscode::Kind::Profile)),
 ];
 impl Source {
     pub fn parse(token: &str) -> Option<Source> {
@@ -29,19 +84,44 @@ impl Source {
     pub fn complete(self, env: &Env) -> Vec<Ref> {
         match self {
             Source::Git(k) => git::complete(env, k),
+            Source::Npm(k) => npm::complete(env, k),
+            Source::Cargo(k) => cargo_toml::complete(env, k),
+            Source::Py(k) => pyproject::complete(env, k),
+            Source::Brew(k) => brew::complete(env, k),
+            Source::Kube(k) => kube::complete(env, k),
+            Source::Ollama => ollama::complete(env),
+            Source::Rustup(k) => rustup::complete(env, k),
+            Source::Vscode(k) => vscode::complete(env, k),
         }
     }
     /// The suggestion kind shown for its candidates.
     pub fn suggestion_kind(self) -> &'static str {
         match self {
             Source::Git(_) => "ref",
+            _ => "value",
         }
     }
     /// Whether file system paths are offered next to the candidates. Positionals that may also name a
-    /// file (`git checkout -- f`) say yes; flag values and names that are never paths say no.
+    /// file (`git checkout -- f`, `npx ./script.js`, `uv run script.py`) say yes; flag values and names
+    /// that are never paths say no.
     pub fn offers_paths(self, is_flag: bool) -> bool {
         match self {
-            Source::Git(_) => !is_flag,
+            Source::Git(_) | Source::Npm(npm::Kind::Bin) | Source::Py(pyproject::Kind::Script) => {
+                !is_flag
+            }
+            Source::Npm(npm::Kind::Script | npm::Kind::Dependency | npm::Kind::Workspace)
+            | Source::Cargo(_)
+            | Source::Py(
+                pyproject::Kind::Dependency
+                | pyproject::Kind::Group
+                | pyproject::Kind::Extra
+                | pyproject::Kind::Tool,
+            )
+            | Source::Brew(_)
+            | Source::Kube(_)
+            | Source::Ollama
+            | Source::Rustup(_)
+            | Source::Vscode(_) => false,
         }
     }
 }
@@ -68,8 +148,13 @@ mod tests {
     fn missing_data_gives_only_built_in_candidates() {
         let nowhere = Path::new("/nonexistent-riga");
         for (token, source) in TOKENS {
+            // Brew falls back to the real prefixes.
+            if matches!(source, Source::Brew(_)) {
+                continue;
+            }
             let found = with_env(nowhere, nowhere, "", |env| source.complete(env));
-            assert!(found.is_empty(), "{token}");
+            // Release channels and built-in profiles.
+            assert!(found.len() <= 4, "{token}");
         }
     }
 }

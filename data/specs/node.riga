@@ -1,0 +1,101 @@
+# Original Riga completion spec for a Node.js CLI subset (MIT). Format reference: docs/SPECS.md.
+# Module names, conditions and inspector addresses are not generated; `--run <npm-script>` reads package.json scripts, and script files use the filesystem.
+# Node does not bundle short flags (-pe is its own spelling), so the root is nobundle.
+# V8 options such as --max-old-space-size only take an attached value (--max-old-space-size=4096).
+command node nobundle "Run JavaScript with Node.js"
+  flag --help|-h "Print Node.js command line options"
+  flag --version|-v "Print the Node.js version"
+  flag --v8-options "Print V8 command line options"
+  flag --eval|-e <script> "Evaluate a script given as an argument"
+  flag --print|-p <script> "Evaluate a script and print the result"
+  flag -pe <script> "Evaluate a script and print the result"
+  flag --check|-c "Check script syntax without running it"
+  flag --interactive|-i "Enter the REPL even if stdin is not a terminal"
+  flag --input-type {commonjs,module,commonjs-typescript,module-typescript} "Module type for --eval, --print or stdin input"
+  flag --require|-r <module> repeat "Preload a CommonJS module"
+  flag --import <module> repeat "Preload an ES module"
+  flag --loader|--experimental-loader <module> repeat "Use a module as a custom loader"
+  flag --conditions|-C <condition> repeat "Extra conditions for conditional exports and imports"
+  flag --env-file <file> repeat "Load environment variables from a file"
+  flag --env-file-if-exists <file> repeat "Load environment variables from a file if it exists"
+  flag --run <npm-script> "Run a script from package.json"
+  flag --watch "Restart the process when imported files change"
+  flag --watch-path <path> repeat requires=--watch "Path to watch for restarts"
+  flag --watch-preserve-output "Keep output when watch mode restarts"
+  flag --inspect [<host:port>] excludes=--inspect-brk,--inspect-wait "Start the inspector (default 127.0.0.1:9229)"
+  flag --inspect-brk [<host:port>] excludes=--inspect-wait "Start the inspector and break before user code"
+  flag --inspect-wait [<host:port>] "Start the inspector and wait for a debugger to attach"
+  flag --inspect-port|--debug-port <host:port> "Inspector host and port"
+  flag --test "Run the built-in test runner"
+  flag --test-only "Run only tests marked with only"
+  flag --test-name-pattern <regex> repeat "Run tests whose names match a pattern"
+  flag --test-skip-pattern <regex> repeat "Skip tests whose names match a pattern"
+  flag --test-reporter {spec,tap,dot,junit,lcov} repeat "Test reporter"
+  flag --test-reporter-destination <file> repeat requires=--test-reporter "Where the test reporter writes"
+  flag --test-concurrency <count> "Number of test files to run at once"
+  flag --test-timeout <ms> "Timeout per test in milliseconds"
+  flag --test-shard <index/total> "Run one shard of the test files"
+  flag --test-force-exit "Exit once all known tests finish"
+  flag --test-update-snapshots "Regenerate test snapshots"
+  flag --experimental-test-coverage "Collect code coverage in the test runner"
+  flag --experimental-test-module-mocks "Allow module mocking in the test runner"
+  flag --experimental-strip-types excludes=--no-experimental-strip-types "Strip TypeScript types when loading .ts files"
+  flag --no-experimental-strip-types "Do not strip TypeScript types"
+  flag --experimental-transform-types "Transform TypeScript-only syntax such as enums"
+  flag --experimental-vm-modules "Enable ES module support in the vm module"
+  flag --experimental-sea-config <file> "Build a single executable application blob from a config"
+  flag --experimental-config-file <file> "Read Node.js options from a config file"
+  flag --experimental-webstorage "Enable the Web Storage API"
+  flag --experimental-eventsource "Enable the EventSource API"
+  flag --enable-source-maps "Use source maps in stack traces"
+  flag --no-warnings "Silence all process warnings"
+  flag --no-deprecation "Silence deprecation warnings"
+  flag --trace-warnings "Print stack traces for process warnings"
+  flag --trace-deprecation "Print stack traces for deprecations"
+  flag --trace-uncaught "Print the throw site of uncaught exceptions"
+  flag --unhandled-rejections {strict,throw,warn,none,warn-with-error-code} "Behaviour for unhandled promise rejections"
+  flag --dns-result-order {ipv4first,ipv6first,verbatim} "Default address order for dns.lookup"
+  flag --permission "Enable the permission model"
+  flag --allow-fs-read <path> repeat requires=--permission "Allow file system reads under the permission model"
+  flag --allow-fs-write <path> repeat requires=--permission "Allow file system writes under the permission model"
+  flag --allow-child-process requires=--permission "Allow child processes under the permission model"
+  flag --allow-worker requires=--permission "Allow worker threads under the permission model"
+  flag --cpu-prof "Write a V8 CPU profile on exit"
+  flag --cpu-prof-dir <directory> requires=--cpu-prof "Directory for CPU profiles"
+  flag --heap-prof "Write a V8 heap profile on exit"
+  flag --heap-prof-dir <directory> requires=--heap-prof "Directory for heap profiles"
+  flag --prof "Write V8 profiler output"
+  flag --expose-gc "Expose the gc() function"
+  flag --preserve-symlinks "Keep symlinks when resolving modules"
+  flag --title <title> "Process title"
+  flag --max-old-space-size [<megabytes>] "V8 old generation heap limit in MiB"
+  flag --max-semi-space-size [<megabytes>] "V8 semi-space size in MiB"
+  flag --stack-size [<kilobytes>] "V8 stack size in KiB"
+  arg [<file>] stop "Script to run, or - for stdin"
+  arg [<arguments>] repeat "Arguments for the script"
+  command inspect "Run a script under the command line debugger"
+    arg [<file>] stop "Script to debug, or host:port to attach to"
+    arg [<arguments>] repeat "Arguments for the script"
+
+#test "node " => +--eval +-e +--check +--env-file
+#test "node in" => +inspect -app.js
+#test "node --ins" => +--inspect +--inspect-brk +--inspect-port -inspect
+#test "node --inspect --insp" => ---inspect-brk ---inspect-wait +--inspect-port
+#test "node --inspect-brk --insp" => ---inspect ---inspect-wait
+#test "node --input-type " => +module +commonjs -inspect
+#test "node --input-type=mod" => +module -commonjs
+#test "node --test-reporter=" => +spec +tap +junit
+#test "node --watch-p" => ---watch-path
+#test "node --watch --watch-p" => +--watch-path
+#test "node --watch --w" => ---watch +--watch-path
+#test "node --check --c" => ---check
+#test "node -c -" => ---check +-e +--eval
+#test "node --require a -r b --re" => +--require
+#test "node --experimental-strip-types --no-exp" => ---no-experimental-strip-types
+#test "node --loader x --experimental-lo" => +--experimental-loader
+#test "node --max-old-space-size=4096 --" => +--eval
+#test "node app.js --" => ---eval
+#test "node -e 'x' --pr" => +--print
+#test "node -pe 'x' --pr" => +--print
+#test "node --allow-fs" => ---allow-fs-read
+#test "node --permission --allow-fs" => +--allow-fs-read +--allow-fs-write

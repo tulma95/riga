@@ -159,7 +159,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 2] = [
+const BUNDLED_SPECS: [(&str, &str); 12] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -168,6 +168,43 @@ const BUNDLED_SPECS: [(&str, &str); 2] = [
         "data/specs/docker.riga",
         include_str!("../data/specs/docker.riga"),
     ),
+    (
+        "data/specs/node.riga",
+        include_str!("../data/specs/node.riga"),
+    ),
+    (
+        "data/specs/npm.riga",
+        include_str!("../data/specs/npm.riga"),
+    ),
+    (
+        "data/specs/brew.riga",
+        include_str!("../data/specs/brew.riga"),
+    ),
+    (
+        "data/specs/cargo.riga",
+        include_str!("../data/specs/cargo.riga"),
+    ),
+    (
+        "data/specs/code.riga",
+        include_str!("../data/specs/code.riga"),
+    ),
+    (
+        "data/specs/kubectl.riga",
+        include_str!("../data/specs/kubectl.riga"),
+    ),
+    (
+        "data/specs/npx.riga",
+        include_str!("../data/specs/npx.riga"),
+    ),
+    (
+        "data/specs/ollama.riga",
+        include_str!("../data/specs/ollama.riga"),
+    ),
+    (
+        "data/specs/rustup.riga",
+        include_str!("../data/specs/rustup.riga"),
+    ),
+    ("data/specs/uv.riga", include_str!("../data/specs/uv.riga")),
 ];
 fn bundled_specs() -> Vec<Spec> {
     BUNDLED_SPECS
@@ -751,7 +788,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 2);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 12);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"
@@ -1497,6 +1534,58 @@ command t "Test tool"
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn npm_values_come_from_package_json() {
+        let root = std::env::temp_dir().join(format!("riga-npm-values-{}", std::process::id()));
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        fs::write(
+            root.join("app/package.json"),
+            r#"{"scripts": {"build": "tsc", "build:watch": "tsc -w", "lint": "eslint ."},
+                "devDependencies": {"eslint": "^9"}}"#,
+        )
+        .unwrap();
+        let app = root.join("app");
+        let labels = |buffer: &str, cwd: &Path| -> Vec<String> {
+            complete_in(buffer, cwd)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        // Scripts only, no paths such as `src/`.
+        let run = labels("npm run ", &app);
+        assert_eq!(run[..3], ["build", "build:watch", "lint"]);
+        assert!(!run.contains(&"src/".into()));
+        assert_eq!(labels("npm run-script bu", &app), ["build", "build:watch"]);
+        let insert = &complete_in("npm run build:", &app)[0];
+        assert_eq!(
+            (insert.insert.as_str(), insert.kind),
+            ("build:watch", "value")
+        );
+        assert_eq!(labels("npm rm es", &app), ["eslint"]);
+        // `--prefix`/`-C` points at another project; outside one, nothing is generated.
+        assert_eq!(labels("npm -C app run l", &root), ["lint"]);
+        assert!(labels("npm run b", &root).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn ollama_models_come_from_manifests() {
+        // complete_in uses the cwd as the engine's home.
+        let home = std::env::temp_dir().join(format!("riga-ollama-values-{}", std::process::id()));
+        let tag = home.join(".ollama/models/manifests/registry.ollama.ai/library/llama3/latest");
+        fs::create_dir_all(tag.parent().unwrap()).unwrap();
+        fs::write(&tag, "{}").unwrap();
+        let labels = |buffer: &str| -> Vec<String> {
+            complete_in(buffer, &home)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        assert_eq!(labels("ollama run l"), ["llama3:latest"]);
+        assert_eq!(labels("ollama rm llama3:latest l"), ["llama3:latest"]);
+        assert_eq!(labels("ollama launch claude --model ll"), ["llama3:latest"]);
+        assert!(labels("ollama pull ll").is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
     fn replacement_middle_unicode() {
         assert_eq!(
             context("cat 世界-file tail", 6),
@@ -1580,6 +1669,211 @@ command t "Test tool"
         s.buffer = "git st".into();
         s.cursor = 6;
         assert!(e.complete(&s).iter().any(|x| x.label == "status"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn npx_values_come_from_node_modules_and_package_json() {
+        let root = std::env::temp_dir().join(format!("riga-npx-values-{}", std::process::id()));
+        fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(root.join("packages/web")).unwrap();
+        fs::write(root.join("node_modules/.bin/eslint"), "").unwrap();
+        fs::write(root.join("packages/web/package.json"), "{}").unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"workspaces": ["packages/*"], "devDependencies": {"esbuild": "^0.24"}}"#,
+        )
+        .unwrap();
+        let labels = |buffer: &str| -> Vec<String> {
+            complete_in(buffer, &root)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        // Local bins first; the command may still be a path.
+        let bins = labels("npx ");
+        assert_eq!(bins[0], "eslint");
+        assert!(bins.contains(&"packages/".into()));
+        assert_eq!(labels("npx -w "), ["packages/web"]);
+        assert_eq!(labels("npx --workspace=p"), ["packages/web"]);
+        assert_eq!(labels("npx -p es"), ["esbuild"]);
+        // After the command, words belong to it.
+        assert!(labels("npx eslint e").is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn vscode_values_come_from_home() {
+        // `complete_in` uses the cwd as home.
+        let home = std::env::temp_dir().join(format!("riga-vscode-values-{}", std::process::id()));
+        fs::create_dir_all(
+            home.join(".vscode/extensions/rust-lang.rust-analyzer-0.3.2-darwin-arm64"),
+        )
+        .unwrap();
+        fs::create_dir_all(home.join("rust-dir")).unwrap();
+        let labels = |buffer: &str| -> Vec<String> {
+            complete_in(buffer, &home)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        assert_eq!(
+            labels("code --uninstall-extension ru"),
+            ["rust-lang.rust-analyzer"]
+        );
+        assert_eq!(
+            labels("code --disable-extension=r"),
+            ["rust-lang.rust-analyzer"]
+        );
+        assert!(labels("code --profile ").is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn uv_values_come_from_pyproject_and_tools_dir() {
+        let root = std::env::temp_dir().join(format!("riga-uv-values-{}", std::process::id()));
+        fs::create_dir_all(root.join("app/src")).unwrap();
+        fs::create_dir_all(root.join("app/.local/share/uv/tools/ruff")).unwrap();
+        fs::write(
+            root.join("app/pyproject.toml"),
+            "[project]\ndependencies = [\"requests>=2\"]\n[project.optional-dependencies]\ncli = [\"click\"]\n\
+             [project.scripts]\nserve = \"app:main\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+        )
+        .unwrap();
+        let app = root.join("app");
+        let labels = |buffer: &str| -> Vec<String> {
+            complete_in(buffer, &app)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        assert_eq!(labels("uv remove ")[..3], ["click", "pytest", "requests"]);
+        assert_eq!(labels("uv sync --group "), ["dev"]);
+        assert_eq!(labels("uv run --extra=c"), ["cli"]);
+        assert_eq!(labels("uv lock -P r"), ["requests"]);
+        assert_eq!(labels("uv tool uninstall ")[..1], ["ruff"]);
+        // uv run offers project scripts next to paths.
+        let run = labels("uv run s");
+        assert!(run.contains(&"serve".into()) && run.contains(&"src/".into()));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn kubectl_and_cargo_installed_use_the_engine_home_not_the_process_environment() {
+        let home = std::env::temp_dir().join(format!("riga-home-values-{}", std::process::id()));
+        fs::create_dir_all(home.join(".kube")).unwrap();
+        fs::create_dir_all(home.join(".cargo")).unwrap();
+        fs::write(
+            home.join(".kube/config"),
+            "contexts:\n- context:\n    cluster: c\n    extensions:\n    - extension:\n        v: 1\n      name: context_info\n    namespace: web\n    user: u\n  name: minikube\ncurrent-context: minikube\n",
+        )
+        .unwrap();
+        fs::write(
+            home.join(".cargo/.crates.toml"),
+            "[v1]\n\"ripgrep 14.1.0 (registry+https://example.invalid)\" = [\"rg\"]\n",
+        )
+        .unwrap();
+        let described = |buffer: &str| -> Vec<(String, String)> {
+            complete_in(buffer, &home)
+                .into_iter()
+                .map(|s| (s.label, s.description))
+                .collect()
+        };
+        assert_eq!(
+            described("kubectl --context "),
+            [("minikube".into(), "Current kubeconfig context".into())]
+        );
+        let namespaces = described("kubectl get pods -n ");
+        assert_eq!(namespaces[0].0, "web");
+        assert_eq!(
+            described("cargo uninstall ")[0],
+            ("ripgrep".into(), "14.1.0 rg".into())
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn rustup_toolchains_come_from_home() {
+        let home = std::env::temp_dir().join(format!("riga-rustup-engine-{}", std::process::id()));
+        fs::create_dir_all(home.join(".rustup/toolchains/nightly-x")).unwrap();
+        let mut e = Engine::new(String::new(), home.clone());
+        let s = State {
+            session: "s".into(),
+            pane: "p".into(),
+            revision: 1,
+            cursor: 15,
+            cwd: home.clone(),
+            buffer: "rustup default ".into(),
+            path: String::new(),
+        };
+        let labels: Vec<_> = e.complete(&s).into_iter().map(|x| x.label).collect();
+        assert!(labels.contains(&"nightly-x".into()) && labels.contains(&"stable".into()));
+        assert!(!labels.contains(&".rustup/".into()));
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn brew_values_come_from_the_prefix_on_shell_path() {
+        let root = std::env::temp_dir().join(format!("riga-brew-values-{}", std::process::id()));
+        let prefix = root.join("hb");
+        for dir in [
+            "bin",
+            "Cellar/wget/1",
+            "Caskroom/firefox",
+            "var/homebrew/pinned/wget",
+        ] {
+            fs::create_dir_all(prefix.join(dir)).unwrap();
+        }
+        fs::write(prefix.join("bin/brew"), "").unwrap();
+        fs::create_dir_all(root.join("wdir")).unwrap();
+        let labels = |buffer: &str| -> Vec<String> {
+            Engine::new(String::new(), root.clone())
+                .complete(&State {
+                    session: "s".into(),
+                    pane: "p".into(),
+                    revision: 1,
+                    cursor: buffer.chars().count(),
+                    cwd: root.clone(),
+                    buffer: buffer.into(),
+                    path: prefix.join("bin").to_string_lossy().into_owned(),
+                })
+                .into_iter()
+                .filter(|s| s.kind != "flag")
+                .map(|s| s.label)
+                .collect()
+        };
+        // Names only, no paths such as `wdir/`.
+        assert_eq!(labels("brew uninstall "), ["firefox", "wget"]);
+        assert_eq!(labels("brew rm --zap w"), ["wget"]);
+        assert_eq!(labels("brew unpin "), ["wget"]);
+        assert_eq!(labels("brew services start "), ["wget"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cargo_values_come_from_cargo_toml() {
+        let root = std::env::temp_dir().join(format!("riga-cargo-values-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("app/src/bin")).unwrap();
+        fs::write(
+            root.join("app/Cargo.toml"),
+            "[package]\nname = \"app\"\n[features]\nfast = []\n[dependencies]\nserde = \"1\"\n\
+             [profile.ci]\ninherits = \"dev\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("app/src/main.rs"), "").unwrap();
+        fs::write(root.join("app/src/bin/helper.rs"), "").unwrap();
+        let app = root.join("app");
+        let labels = |buffer: &str, cwd: &Path| -> Vec<String> {
+            complete_in(buffer, cwd)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        // Names only, no paths such as `src/`.
+        assert_eq!(labels("cargo build -p ", &app), ["app"]);
+        assert_eq!(labels("cargo run --bin ", &app), ["app", "helper"]);
+        assert_eq!(labels("cargo b -F f", &app), ["fast"]);
+        assert_eq!(labels("cargo rm s", &app), ["serde"]);
+        assert_eq!(labels("cargo build --profile c", &app), ["ci"]);
+        let insert = &complete_in("cargo build --features=fa", &app)[0];
+        assert_eq!(insert.insert, "--features=fast");
+        // `-C` points at another package; outside one, nothing is generated.
+        assert_eq!(labels("cargo -C app run --bin h", &root), ["helper"]);
+        assert!(labels("cargo build -p ", &root).is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }

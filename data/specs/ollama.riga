@@ -1,0 +1,77 @@
+# Original Riga completion spec for an Ollama CLI subset (MIT). Format reference: docs/SPECS.md.
+# Local model names come from ~/.ollama/models/manifests (not $OLLAMA_MODELS); registry names for pull are not generated; integration names for `launch` are a fixed list.
+command ollama "Run and manage large language models locally"
+  flag --help|-h persistent "Print usage"
+  flag --version|-v "Print version information"
+  flag --verbose "Print response timings"
+  flag --nowordwrap "Do not wrap long lines"
+  command serve|start "Start the Ollama server"
+  command run "Run a model, interactively or with a prompt"
+    flag --format <format> "Response format, such as json"
+    flag --keepalive <duration> "How long to keep the model loaded, such as 5m"
+    flag --think [{true,false,high,medium,low}] "Enable thinking mode or set its level"
+    flag --hidethinking "Hide thinking output"
+    flag --insecure "Allow an insecure registry"
+    flag --verbose "Print response timings"
+    flag --nowordwrap "Do not wrap long lines"
+    flag --dimensions <count> "Truncate embeddings to this many dimensions"
+    flag --truncate [{true,false}] "Truncate embedding inputs that exceed the context length"
+    arg <ollama-model> "Model to run"
+    arg [<prompt>] repeat "Prompt to send instead of starting a chat"
+  command create "Create a model from a Modelfile"
+    flag --file|-f <file> "Modelfile to read"
+    flag --quantize|-q <level> "Quantize the model to this level, such as q4_K_M"
+    flag --draft-quantize <level> "Quantize the draft model to this level"
+    flag --experimental "Use experimental safetensors model creation"
+    arg <model> "Name of the new model"
+  command show "Show information about a model"
+    flag --license "Print the model license"
+    flag --modelfile "Print the Modelfile"
+    flag --parameters "Print the model parameters"
+    flag --system "Print the system message"
+    flag --template "Print the prompt template"
+    flag --verbose|-v "Print detailed model information"
+    arg <ollama-model> "Model to inspect"
+  command stop "Unload a running model"
+    arg <ollama-model> "Model to stop"
+  command pull "Download a model from a registry"
+    flag --insecure "Allow an insecure registry"
+    arg <model> "Model to download"
+  command push "Upload a model to a registry"
+    flag --insecure "Allow an insecure registry"
+    arg <ollama-model> "Model to upload"
+  command list|ls "List local models"
+  command ps "List running models"
+  command cp "Copy a model"
+    arg <ollama-model> "Model to copy"
+    arg <destination> "Name for the copy"
+  command rm "Remove models"
+    arg <ollama-model> repeat "Models to remove"
+  command signin "Sign in to ollama.com"
+  command signout "Sign out from ollama.com"
+  command launch "Open the Ollama menu or launch an integration"
+    flag --config "Configure the integration without launching it"
+    flag --model <ollama-model> "Model for the integration"
+    flag --restore "Restore the integration's default profile"
+    flag --yes|-y "Answer yes to confirmation prompts"
+    arg [{claude,chatgpt,codex,opencode,copilot,droid,cline,qwen,kimi,openclaw,hermes,hermes-desktop,omp,dsh,muse,pi,pool,vscode}] "Integration to launch"
+    arg [<args>] repeat "Arguments passed to the integration after --"
+  command help "Show help for a command"
+    arg [{serve,start,create,show,run,stop,pull,push,signin,signout,list,ls,ps,cp,rm,launch}] "Command to describe"
+
+#test "ollama " => +run +pull +serve +start +list +ls +launch +--version +-v
+#test "ollama --" => +--help +--verbose +--nowordwrap
+#test "ollama run --" => +--think +--format +--help ---version
+#test "ollama run llama3 --ve" => +--verbose
+#test "ollama run --think=h" => +high
+#test "ollama run --think --" => ---think +--format
+#test "ollama run --truncate=f" => +false
+#test "ollama show -" => +-v +--modelfile +-h
+#test "ollama show --license --" => ---license +--template
+#test "ollama create -f Modelfile -" => --f +-q
+#test "ollama create --quantize q4_K_M --" => ---quantize +--file
+#test "ollama launch " => +claude +codex +vscode
+#test "ollama launch claude --" => +--model +--yes
+#test "ollama ls -" => +-h ---version
+#test "ollama help " => +run +pull
+#test "ollama start --" => +--help

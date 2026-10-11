@@ -29,7 +29,7 @@ command docker "Manage containers"
 ### Values
 
 - `<file>` and `<directory>` use the filesystem provider.
-- `<git-branch>`, `<git-ref>` and `<git-remote>` read local data. See [Built-in value sources](#built-in-value-sources).
+- `<git-...>`, `<npm-...>`, `<cargo-...>` and the other built-in tokens read local data. See [Built-in value sources](#built-in-value-sources).
 - Any other `<label>` is free text.
 - `{a,b,c}` lists choices.
 - `[VALUE]` makes a value optional. An optional flag value is only recognized attached (`--color=auto`) and never consumes the next word. On an arg, `[]` is documentation only, since positionals always fill args in order.
@@ -77,17 +77,37 @@ Any line beginning with `#test` (after indentation) must be a valid test, so nea
 
 ## Built-in value sources
 
-Sources read local files and never run the tool. Rules shared by all of them:
+Sources read local files and never run the tool. They use default locations under the home directory the daemon resolves for the user. Rules shared by all of them:
 
 - Only regular files are read. FIFOs, devices and directories with a manifest's name are ignored, so they cannot hang the worker.
 - Invalid UTF-8 is read lossily. Non-UTF-8 directory entries are skipped.
 - Names containing control or bidirectional characters, empty names, and names over 256 characters are dropped. Duplicates keep the first description. Descriptions are cut to 100 characters, and one with control or bidirectional characters is blanked.
 - Names are sorted, then capped, so an oversized source yields the first names alphabetically.
+- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR` and `$HOMEBREW_CACHE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir` or `--user-data-dir` in the buffer.
 - "Paths" below means file system paths are offered next to the values. Git tokens do so for positionals only, not flag values.
 
 | Token(s) | Lists | Read from | Paths | Not followed |
 | --- | --- | --- | --- | --- |
 | `<git-branch>`, `<git-ref>`, `<git-remote>` | Branches, refs, remotes | The repository files (see [Git refs](#git-refs)) | Positionals | Fetching, `git` itself |
+| `<npm-script>` | `scripts` names | Nearest `package.json` (1 MiB, 5,000 names) | No | Running npm |
+| `<npm-dependency>` | `dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies` names | Nearest `package.json` | No | The registry |
+| `<npm-bin>` | Installed binaries | Nearest `node_modules/.bin` | Positionals | |
+| `<npm-workspace>` | Workspace directories | `workspaces` in `package.json` (literal paths and a trailing `/*`, each with a `package.json`; up to 500) | No | Other glob forms |
+| `<cargo-package>`, `<cargo-lock-package>`, `<cargo-bin>`, `<cargo-example>`, `<cargo-test>`, `<cargo-bench>`, `<cargo-feature>`, `<cargo-dependency>`, `<cargo-profile>` | Packages, targets, features, dependencies, profiles | Nearest `Cargo.toml`, then the workspace root and its members (up to 500), and `Cargo.lock` | No | `--manifest-path`, running cargo or build scripts |
+| `<cargo-installed>` | Installed crates | `~/.cargo/.crates.toml` | No | A custom `$CARGO_HOME` or `--root` |
+| `<py-dependency>`, `<py-group>`, `<py-extra>`, `<py-script>` | Dependencies, groups, extras, scripts | Nearest `pyproject.toml` | `<py-script>` positionals | `--project` |
+| `<uv-tool>` | Installed uv tools | `~/.local/share/uv/tools` | No | `$UV_TOOL_DIR` |
+| `<brew-package>`, `<brew-formula>` | All available formulae and casks, or formulae | `~/Library/Caches/Homebrew/api/*_names.txt` | No | `$HOMEBREW_CACHE` |
+| `<brew-installed>`, `<brew-installed-formula>` | Installed formulae and casks, or formulae | `Cellar` and `Caskroom` under the Homebrew prefix | No | `--prefix` |
+| `<brew-pinned>`, `<brew-tap>` | Pinned formulae, taps | `var/homebrew/pinned`, `Library/Taps` under the prefix | No | |
+| `<kube-context>`, `<kube-cluster>`, `<kube-user>`, `<kube-namespace>` | Names from the kubeconfig | `~/.kube/config` (1 MiB, 5,000 names). No cluster is contacted. | No | `$KUBECONFIG`, `--kubeconfig` |
+| `<ollama-model>` | Models, named as `ollama list` shows them | `~/.ollama/models/manifests` | No | `$OLLAMA_MODELS` |
+| `<rustup-toolchain>` | Toolchains, plus `stable`, `beta`, `nightly` | `~/.rustup/toolchains` | No | `$RUSTUP_HOME` |
+| `<rustup-target>`, `<rustup-component>` | Targets, components | Each toolchain's `lib/rustlib/components` | No | `$RUSTUP_HOME` |
+| `<vscode-extension>` | Installed extensions (skips `.obsolete` entries) | `~/.vscode/extensions` | No | `--extensions-dir` |
+| `<vscode-profile>` | Profile names | `userDataProfiles` in the first 1 MiB of VS Code's `storage.json` | No | `--user-data-dir` |
+
+The Homebrew prefix is the one of the `brew` on the shell's PATH, else `/opt/homebrew`, then `/usr/local`.
 
 ### Git refs
 

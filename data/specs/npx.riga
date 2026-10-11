@@ -1,0 +1,40 @@
+# Original Riga completion spec for an npx (npm package runner) subset (MIT). Format reference: docs/SPECS.md.
+# Local binaries come from node_modules/.bin, workspaces from package.json `workspaces`, and
+# --package from package.json dependencies; registry package names are not generated.
+# The command arg is `stop`: flags after the package binary belong to it, not to npx.
+command npx "Run a command from a local or remote npm package"
+  flag --help|-h "Print usage"
+  flag --version|-v "Print the npm version"
+  flag --yes|-y excludes=--no "Install missing packages without prompting"
+  flag --no excludes=--yes "Refuse to install missing packages"
+  flag --package|-p <npm-dependency> repeat "Package to install before running"
+  flag --call|-c <command> "Shell command to run with package binaries on PATH"
+  flag --workspace|-w <npm-workspace> repeat "Run in the context of a workspace"
+  flag --workspaces "Run in the context of all configured workspaces"
+  flag --include-workspace-root requires=--workspaces "Also run in the workspace root"
+  flag --prefix <directory> "Directory to treat as the project root"
+  flag --registry <url> "Registry to install packages from"
+  flag --cache <directory> "Location of the npm cache"
+  flag --offline "Use only the local cache"
+  flag --prefer-offline "Prefer the cache over the network"
+  flag --prefer-online "Revalidate cached data with the registry"
+  flag --loglevel {silent,error,warn,notice,http,info,verbose,silly} "Logging level"
+  flag --silent|-s "Suppress log output"
+  flag --quiet|-q "Only log warnings and errors"
+  flag --allow-scripts <package-list> repeat "Packages allowed to run install scripts"
+  flag --strict-allow-scripts "Fail instead of warning on blocked install scripts"
+  flag --dangerously-allow-all-scripts "Run every install script without checks"
+  arg <npm-bin> stop "Package or binary to run"
+  arg [<args>] repeat "Arguments for the command"
+
+#test "npx -" => +--yes +--package +-c +--workspaces ---include-workspace-root
+#test "npx --loglevel " => +silent +verbose
+#test "npx --loglevel=wa" => +warn
+#test "npx -y -" => ---yes ---no +--package
+#test "npx --no -" => ---yes --y +--call
+#test "npx -p a -p b -" => +-p +--package
+#test "npx --workspaces -" => +--include-workspace-root
+#test "npx -q -" => ---quiet +--silent
+#test "npx --yes" => +--yes
+#test "npx eslint --" => ---yes ---package
+#test "npx --pref" => +--prefix +--prefer-offline +--prefer-online

@@ -6,7 +6,7 @@ Riga is an autocomplete popup for **zsh in iTerm2 on macOS**, written in Rust. A
 
 - Executables on your PATH, and files and directories (including `cd`).
 - Bundled completion specs for common CLI tools (see `data/specs/`): subcommands, flags, choices and descriptions.
-- Git branches, refs and remotes where a spec asks for them, read from the repository files.
+- Real names where a spec asks for them, such as branches, scripts, packages and contexts, read from local files.
 
 ## Requirements
 
@@ -64,6 +64,7 @@ Completion specs are bundled with Riga (`data/specs/*.riga`, compiled into the b
 - The popup appears only when the caret position and active pane can be verified. Focus tracking polls, so there is a short delay after a change.
 - Aliases, shell functions, wrappers such as `sudo git` and complex shell syntax get no completion.
 - Specs cannot run code.
+- Value sources use default locations and ignore environment variables such as `$KUBECONFIG`.
 - Not yet verified: extra displays and mixed scaling, fullscreen, reverse search.
 
 ## Documentation
