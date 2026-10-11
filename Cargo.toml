@@ -1,6 +1,6 @@
 [package]
 name = "riga"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Local zsh/iTerm2 autocomplete for macOS"
 license = "MIT"
