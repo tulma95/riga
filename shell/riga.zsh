@@ -12,6 +12,8 @@ typeset -g _RIGA_LOADED=1 _RIGA_FD='' _RIGA_RX='' _RIGA_BUFFER='' _RIGA_PWD=''
 typeset -g _RIGA_PATH='' _RIGA_ENCODED_PATH=''
 typeset -g _RIGA_SESSION="${$}-${RANDOM}-${EPOCHREALTIME}"
 typeset -gi _RIGA_REV=0 _RIGA_CURSOR=-1 _RIGA_EDITING=0 _RIGA_VISIBLE=0
+# Set by next/prev; Return accepts only while a suggestion was picked this way.
+typeset -gi _RIGA_PICKED=0
 typeset -gA _RIGA_OLD_WIDGET _RIGA_OLD_MACRO _RIGA_BINDINGS
 _RIGA_OLD_WIDGET=()
 _RIGA_OLD_MACRO=()
@@ -48,7 +50,7 @@ _riga_disconnect() {
     zle -F "$_RIGA_FD" 2>/dev/null
     exec {_RIGA_FD}>&-
   fi
-  _RIGA_FD='' _RIGA_RX='' _RIGA_VISIBLE=0
+  _RIGA_FD='' _RIGA_RX='' _RIGA_VISIBLE=0 _RIGA_PICKED=0
 }
 _riga_send() {
   emulate -L zsh
@@ -81,7 +83,7 @@ _riga_publish() {
   (( _RIGA_EDITING )) && [[ -n $_RIGA_FD ]] || return 0
   [[ $BUFFER == $_RIGA_BUFFER && $CURSOR == $_RIGA_CURSOR && $PWD == $_RIGA_PWD && $PATH == $_RIGA_PATH ]] && return 0
   (( ++_RIGA_REV ))
-  _RIGA_VISIBLE=0 _RIGA_BUFFER=$BUFFER _RIGA_CURSOR=$CURSOR _RIGA_PWD=$PWD
+  _RIGA_VISIBLE=0 _RIGA_PICKED=0 _RIGA_BUFFER=$BUFFER _RIGA_CURSOR=$CURSOR _RIGA_PWD=$PWD
   # Avoid pathological buffers filling IPC or delaying the editor.
   (( ${#BUFFER} <= 16384 )) || { _riga_send $'E\t'"$_RIGA_SESSION"$'\t'"$_RIGA_REV"; return 0; }
   local encoded_pwd encoded_buffer REPLY
@@ -95,12 +97,12 @@ _riga_publish() {
   return 0
 }
 _riga_line_init() {
-  _RIGA_EDITING=1 _RIGA_CURSOR=-1 _RIGA_VISIBLE=0
+  _RIGA_EDITING=1 _RIGA_CURSOR=-1 _RIGA_VISIBLE=0 _RIGA_PICKED=0
   _riga_connect && _riga_publish
   return 0
 }
 _riga_line_finish() {
-  _RIGA_EDITING=0 _RIGA_VISIBLE=0
+  _RIGA_EDITING=0 _RIGA_VISIBLE=0 _RIGA_PICKED=0
   (( ++_RIGA_REV ))
   _riga_send $'E\t'"$_RIGA_SESSION"$'\t'"$_RIGA_REV"
   return 0
@@ -115,6 +117,7 @@ _riga_reply() {
     P)
       [[ ${fields[3]-} == <-> ]] || return 0
       _RIGA_VISIBLE=$(( fields[3] > 0 ))
+      (( _RIGA_VISIBLE )) || _RIGA_PICKED=0
       ;;
     I)
       [[ ${fields[3]-} == <-> && ${fields[4]-} == <-> && ${#fields} == 5 ]] || return 0
@@ -126,7 +129,7 @@ _riga_reply() {
       (( end < ${#BUFFER} )) && suffix=${BUFFER[end+1,-1]}
       BUFFER=$prefix$REPLY$suffix
       CURSOR=$(( start + ${#REPLY} ))
-      _RIGA_VISIBLE=0
+      _RIGA_VISIBLE=0 _RIGA_PICKED=0
       _riga_publish
       zle -R
       ;;
@@ -154,9 +157,16 @@ _riga_key() {
   # ZLE can invoke a key before pre-redraw; publish first so stale suggestions
   # never intercept a key for a buffer that has already changed.
   _riga_publish
-  if (( _RIGA_VISIBLE )) && [[ -n $_RIGA_FD ]]; then
+  # Return accepts only a suggestion picked with next/prev; otherwise it runs the line.
+  if [[ $action == enter ]]; then
+    (( _RIGA_PICKED )) && action=accept
+  fi
+  if (( _RIGA_VISIBLE )) && [[ -n $_RIGA_FD && $action != enter ]]; then
     _riga_send $'A\t'"$_RIGA_SESSION"$'\t'"$_RIGA_REV"$'\t'"$action" && {
-      [[ $action == dismiss || $action == accept ]] && _RIGA_VISIBLE=0
+      case $action in
+        dismiss|accept) _RIGA_VISIBLE=0 _RIGA_PICKED=0 ;;
+        *) _RIGA_PICKED=1 ;;
+      esac
       return 0
     }
   fi
@@ -206,5 +216,6 @@ for _riga_map in emacs viins; do
   _riga_bind "$_riga_map" prev "$RIGA_KEY_PREV"
   _riga_bind "$_riga_map" accept "$RIGA_KEY_ACCEPT"
   _riga_bind "$_riga_map" dismiss "$RIGA_KEY_DISMISS"
+  _riga_bind "$_riga_map" enter '^M'
 done
 unset _riga_map

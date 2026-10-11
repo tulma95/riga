@@ -266,6 +266,19 @@ fn send(clients: &mut HashMap<u64, UnixStream>, id: u64, line: String) {
         }
     }
 }
+/// Accepting at the end of the line adds a space so the popup moves on to the next word.
+/// Directories and `--opt=` already lead somewhere; AI suggestions are whole lines.
+fn accepted_text(item: &completion::Suggestion, buffer: &str) -> String {
+    let continues = item.end == buffer.chars().count()
+        && item.kind != "ai"
+        && !item.insert.is_empty()
+        && !item.insert.ends_with(['/', '=', ' ']);
+    if continues {
+        format!("{} ", item.insert)
+    } else {
+        item.insert.clone()
+    }
+}
 fn serve() -> io::Result<()> {
     let listener = bind()?;
     unsafe {
@@ -386,7 +399,7 @@ fn serve() -> io::Result<()> {
                                         "I\t{revision}\t{}\t{}\t{}\n",
                                         item.start,
                                         item.end,
-                                        protocol::encode(&item.insert)
+                                        protocol::encode(&accepted_text(item, &s.state.buffer))
                                     ),
                                 );
                                 s.dismissed = true;
@@ -593,6 +606,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accepting_at_line_end_adds_a_space_unless_the_word_continues() {
+        let item = |kind, insert: &str, end| completion::Suggestion {
+            label: String::new(),
+            kind,
+            description: String::new(),
+            insert: insert.into(),
+            start: 4,
+            end,
+        };
+        assert_eq!(accepted_text(&item("command", "checkout", 6), "git ch"), "checkout ");
+        assert_eq!(accepted_text(&item("command", "checkout", 6), "git ch | x"), "checkout");
+        assert_eq!(accepted_text(&item("directory", "src/", 5), "ls sr"), "src/");
+        assert_eq!(accepted_text(&item("flag", "--format=", 6), "x --fo"), "--format=");
+        assert_eq!(accepted_text(&item("ai", "ls -la", 6), "# list"), "ls -la");
+    }
     fn state(session: &str, revision: u64) -> State {
         State {
             session: session.into(),

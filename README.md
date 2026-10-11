@@ -41,6 +41,7 @@ This is idempotent. Every new iTerm2 shell then starts the server when it isn't 
 | --- | --- |
 | Ctrl-N / Ctrl-P | Next / previous suggestion |
 | Tab | Insert the selected suggestion |
+| Return | After Ctrl-N / Ctrl-P, insert the selected suggestion; otherwise run the line as usual |
 | Ctrl-G | Dismiss |
 
 Insertion edits the buffer only. Riga never runs the command. When the popup is hidden, the keys keep their normal behavior. To rebind, set `RIGA_KEY_NEXT`, `RIGA_KEY_PREV`, `RIGA_KEY_ACCEPT` and `RIGA_KEY_DISMISS` (zsh `bindkey` notation, for example `'^N'`) before sourcing `shell/riga.zsh`.

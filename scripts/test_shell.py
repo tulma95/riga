@@ -178,6 +178,20 @@ def check_zle(tmp):
         reply(f"I\t{before[3]}\t0\t18\t" + encode(insertion))
         state(insertion, len(insertion))
         assert not marker.exists(), "completion executed command"
+        # Return accepts a suggestion picked with next/prev, and otherwise runs the line.
+        send("\x15echo pi")
+        picking = state("echo pi", 7)
+        reply(f"P\t{picking[3]}\t2")
+        send("\x0e")
+        expect("A", lambda f: f[3] == "next")
+        send("\r")
+        expect("A", lambda f: f[3] == "accept" and f[2] == picking[3])
+        reply(f"I\t{picking[3]}\t5\t7\tpicked")
+        picked = state("echo picked", 11)
+        reply(f"P\t{picked[3]}\t2")
+        send("\r")
+        expect("E")
+        state("")
         # A `# request` line: an AI command replaces the whole buffer and is never executed.
         ai_marker = tmp / "ai-must-not-exist"
         prompt = "# make a marker file here 🌍"

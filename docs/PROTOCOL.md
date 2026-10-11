@@ -12,6 +12,6 @@ Shell → daemon:
 Daemon → shell:
 
 - `P REV COUNT` reports visible suggestion count; zero restores ordinary key behavior.
-- `I REV START END INSERT` requests replacement of the half-open character range `[START, END)` with escaped INSERT. It never includes Return or an execute operation.
+- `I REV START END INSERT` requests replacement of the half-open character range `[START, END)` with escaped INSERT. At the end of the line, INSERT ends with a space unless it ends in `/` or `=` or is an AI command line. It never includes Return or an execute operation.
 
 The first state binds SESSION to the connection. Subsequent states must preserve pane identity and strictly increase revision. Completion results must match the current revision and editing state. The shell independently checks revision, BUFFER, CURSOR, cwd and PATH before applying a reply. Moving the cursor, typing, pasting or navigating history invalidates acceptance before it can touch a newer buffer. All queueing is ephemeral; no buffers are persisted.
