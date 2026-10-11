@@ -1,12 +1,13 @@
 mod macos;
 use riga::{
+    background::Key as BgKey,
     completion::{self, Engine, Suggestion},
     protocol::{self, Message, State},
     session::Session,
     spec,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{self, BufRead, BufReader, Read, Write},
     os::{
@@ -57,11 +58,71 @@ enum Event {
     Completed(String, u64, Vec<Suggestion>),
 }
 type Pending = Arc<(Mutex<HashMap<String, State>>, Condvar)>;
-fn spawn_completion(tx: mpsc::SyncSender<Event>) -> Pending {
+type Shared = Arc<Mutex<Waiters>>;
+/// Which sessions' latest processed request waits on which background tool run.
+/// Invariant: a session appears under a key only for its most recent processed state, and
+/// `forget` drops it when its editing ends, so a finished run only wakes live sessions.
+#[derive(Default)]
+struct Waiters {
+    latest: HashMap<String, State>,
+    waiting: HashMap<BgKey, HashSet<String>>,
+}
+impl Waiters {
+    fn record(&mut self, state: State, keys: Vec<BgKey>) {
+        self.forget_waits(&state.session);
+        for key in keys {
+            self.waiting
+                .entry(key)
+                .or_default()
+                .insert(state.session.clone());
+        }
+        self.latest.insert(state.session.clone(), state);
+    }
+    fn forget_waits(&mut self, session: &str) {
+        self.waiting.retain(|_, set| {
+            set.remove(session);
+            !set.is_empty()
+        });
+    }
+    fn forget(&mut self, session: &str) {
+        self.forget_waits(session);
+        self.latest.remove(session);
+    }
+    /// The states to recompute because `key` finished.
+    fn wake(&mut self, key: &BgKey) -> Vec<State> {
+        let sessions = self.waiting.remove(key).unwrap_or_default();
+        sessions
+            .iter()
+            .filter_map(|s| self.latest.get(s).cloned())
+            .collect()
+    }
+}
+/// Queue `states` unless a newer request for the same session is already pending
+/// (the main loop rejects results whose revision is no longer current).
+fn requeue(pending: &Pending, states: Vec<State>) {
+    if states.is_empty() {
+        return;
+    }
+    let (lock, cv) = &**pending;
+    let mut jobs = lock.lock().unwrap();
+    for state in states {
+        jobs.entry(state.session.clone()).or_insert(state);
+    }
+    cv.notify_one();
+}
+fn spawn_completion(tx: mpsc::SyncSender<Event>) -> (Pending, Shared) {
     let pending: Pending = Arc::new((Mutex::new(HashMap::new()), Condvar::new()));
-    let p = pending.clone();
+    let waiters = Shared::default();
+    let (p, w) = (pending.clone(), waiters.clone());
     thread::spawn(move || {
         let mut engine = Engine::default();
+        // When a background tool run finishes, redo the requests that were waiting on it so
+        // their values appear without another keystroke.
+        let (wp, ww) = (p.clone(), w.clone());
+        engine.on_background_update(move |key| {
+            let states = ww.lock().unwrap().wake(key);
+            requeue(&wp, states);
+        });
         loop {
             let job = {
                 let (lock, cv) = &*p;
@@ -73,6 +134,20 @@ fn spawn_completion(tx: mpsc::SyncSender<Event>) -> Pending {
                 jobs.remove(&key).unwrap()
             };
             let items = engine.complete(&job);
+            // Register before checking: a run that finished meanwhile is woken here, one that
+            // finishes later is woken by its notification.
+            let keys = engine.take_background_wanted();
+            let done: Vec<_> = keys
+                .iter()
+                .filter(|k| !engine.background_running(k))
+                .cloned()
+                .collect();
+            let states = {
+                let mut w = w.lock().unwrap();
+                w.record(job.clone(), keys);
+                done.iter().flat_map(|k| w.wake(k)).collect()
+            };
+            requeue(&p, states);
             if tx
                 .send(Event::Completed(job.session, job.revision, items))
                 .is_err()
@@ -81,7 +156,7 @@ fn spawn_completion(tx: mpsc::SyncSender<Event>) -> Pending {
             }
         }
     });
-    pending
+    (pending, waiters)
 }
 fn bind() -> io::Result<UnixListener> {
     let path = socket_path();
@@ -185,7 +260,7 @@ fn serve() -> io::Result<()> {
         signal(13, 1);
     }
     let (tx, rx) = mpsc::sync_channel(256);
-    let pending = spawn_completion(tx.clone());
+    let (pending, waiters) = spawn_completion(tx.clone());
     start_listener(listener, tx);
     let _pool = macos::Pool::new();
     let mut desktop = macos::Desktop::new();
@@ -221,6 +296,7 @@ fn serve() -> io::Result<()> {
                     for (key, s) in &sessions {
                         if s.connection == id {
                             jobs.remove(key);
+                            waiters.lock().unwrap().forget(key);
                         }
                     }
                     sessions.retain(|_, s| s.connection != id);
@@ -254,6 +330,7 @@ fn serve() -> io::Result<()> {
                     {
                         s.end(revision);
                         pending.0.lock().unwrap().remove(&key);
+                        waiters.lock().unwrap().forget(&key);
                         send(&mut clients, id, format!("P\t{}\t0\n", revision));
                     }
                 }
@@ -418,7 +495,24 @@ fn complete(args: &[String]) -> io::Result<()> {
         buffer: buffer.clone(),
         path: env::var("PATH").unwrap_or_default(),
     };
-    let items = Engine::default().complete(&state);
+    let mut engine = Engine::default();
+    let (tx, rx) = mpsc::channel();
+    engine.on_background_update(move |_| {
+        let _ = tx.send(());
+    });
+    let mut items = engine.complete(&state);
+    // A one-shot run has no next keystroke: wait (up to 4 s) for background tool runs to finish,
+    // then retry. Each finished run sends a notification after clearing its busy flag.
+    if engine.background_busy() {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while engine.background_busy() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if rx.recv_timeout(left).is_err() {
+                break;
+            }
+        }
+        items = engine.complete(&state);
+    }
     let mut out = io::stdout().lock();
     for s in items {
         let fields = [s.label.as_str(), s.kind, &s.description, &s.insert];
@@ -473,5 +567,52 @@ fn main() {
     if let Err(e) = result {
         eprintln!("riga: {e}");
         std::process::exit(1);
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn state(session: &str, revision: u64) -> State {
+        State {
+            session: session.into(),
+            pane: "p".into(),
+            revision,
+            cursor: 0,
+            cwd: PathBuf::new(),
+            buffer: String::new(),
+            path: String::new(),
+        }
+    }
+    fn key(n: &str) -> BgKey {
+        ("/p".into(), vec![n.into()])
+    }
+    #[test]
+    fn finished_run_wakes_only_sessions_that_waited_on_it() {
+        let mut w = Waiters::default();
+        w.record(state("a", 1), vec![key("tmux")]);
+        w.record(state("b", 5), vec![]); // B typed later and needs nothing
+        let woken = w.wake(&key("tmux"));
+        assert_eq!(woken.len(), 1);
+        assert_eq!((woken[0].session.as_str(), woken[0].revision), ("a", 1));
+        assert!(w.wake(&key("tmux")).is_empty());
+    }
+    #[test]
+    fn newer_state_and_ended_sessions_drop_their_waits() {
+        let mut w = Waiters::default();
+        w.record(state("a", 1), vec![key("x")]);
+        w.record(state("a", 2), vec![key("y")]);
+        assert!(w.wake(&key("x")).is_empty());
+        assert_eq!(w.wake(&key("y"))[0].revision, 2);
+        w.record(state("a", 3), vec![key("z")]);
+        w.forget("a");
+        assert!(w.wake(&key("z")).is_empty() && w.latest.is_empty());
+    }
+    #[test]
+    fn requeue_never_overrides_a_newer_pending_request() {
+        let pending: Pending = Arc::default();
+        pending.0.lock().unwrap().insert("a".into(), state("a", 9));
+        requeue(&pending, vec![state("a", 1), state("b", 2)]);
+        let jobs = pending.0.lock().unwrap();
+        assert_eq!((jobs["a"].revision, jobs["b"].revision), (9, 2));
     }
 }

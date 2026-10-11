@@ -47,8 +47,15 @@ impl Session {
         if !self.editing || self.dismissed || revision != self.state.revision {
             return false;
         }
+        // A refresh of already-current items (a background value arrived) keeps the user's
+        // selection on the same item; fresh results for a new revision start at the top.
+        let keep = (!self.stale)
+            .then(|| self.items.get(self.selected).cloned())
+            .flatten();
+        self.selected = keep
+            .and_then(|k| items.iter().position(|i| *i == k))
+            .unwrap_or(0);
         self.items = items;
-        self.selected = 0;
         self.stale = false;
         true
     }
@@ -138,5 +145,33 @@ mod tests {
         }];
         assert!(s.update(1, state(3)));
         assert!(!s.eligible("ABC"));
+    }
+    fn item(label: &str) -> Suggestion {
+        Suggestion {
+            label: label.into(),
+            kind: "value",
+            description: String::new(),
+            insert: label.into(),
+            start: 0,
+            end: 1,
+        }
+    }
+    #[test]
+    fn same_revision_refresh_keeps_selected_item() {
+        let mut s = Session::new(1, state(1));
+        assert!(s.apply(1, vec![item("a"), item("b"), item("c")]));
+        s.selected = 1;
+        assert!(s.apply(1, vec![item("x"), item("a"), item("b")]));
+        assert_eq!(s.items[s.selected].label, "b");
+        // Selected item vanished: back to the top rather than pointing past the end.
+        s.selected = 2;
+        assert!(s.apply(1, vec![item("x")]));
+        assert_eq!(s.selected, 0);
+        // A newer revision always starts at the top; outdated results are still rejected.
+        s.selected = 0;
+        assert!(s.update(1, state(2)));
+        assert!(!s.apply(1, vec![item("x"), item("y")]));
+        assert!(s.apply(2, vec![item("y"), item("x")]));
+        assert_eq!(s.selected, 0);
     }
 }

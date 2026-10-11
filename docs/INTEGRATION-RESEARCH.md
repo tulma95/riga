@@ -28,7 +28,7 @@ The normal [iTerm2 shell integration](https://iterm2.com/documentation-shell-int
 
 Callbacks and user-defined shell generators are not supported.
 
-The former Git-only TSV catalog was replaced by general `.riga` specs (bundled specs for Git, Docker and other tools) describing nested commands, option aliases, value types and choices, repeatability, persistent flags, requires/excludes rules, and positional args. The native completion provider interprets preceding ZLE tokens to retain command context across options and arguments, including short-option bundles and attached values. This is local parsing of declarative data. Value sources read local files directly and never run the tool. Specs have no shell hooks, user-defined generators or callbacks, and nothing changes pane and caret tracking. See the [spec format](SPECS.md) for supported behavior and checks.
+The former Git-only TSV catalog was replaced by general `.riga` specs (bundled specs for Git, Docker and other tools) describing nested commands, option aliases, value types and choices, repeatability, persistent flags, requires/excludes rules, and positional args. The native completion provider interprets preceding ZLE tokens to retain command context across options and arguments, including short-option bundles and attached values. This is local parsing of declarative data. Value sources read local files directly; the only subprocesses are fixed, read-only `tmux`, `ffmpeg` and `docker` list commands run on a background thread (`src/background.rs`), never in the shell. Specs have no shell hooks, user-defined generators or callbacks, and nothing changes pane and caret tracking. See the [spec format](SPECS.md) for supported behavior and checks.
 
 ## Menu bar presence
 

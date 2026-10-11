@@ -11,7 +11,7 @@ Terminal autocomplete for macOS, zsh and iTerm2 only: a Rust daemon plus `shell/
 - Don't hide and reshow the panel on every refresh (it flashes).
 - Shell bindings work normally while the popup is hidden; loading, unloading and reloading restore widgets and macros.
 - Replacement ranges are Unicode character offsets, not bytes. Inserted words are shell-escaped.
-- Value sources read files and never run the tool. Never run `git`: repository config and hooks can execute code, and its data is readable from files.
+- Value sources read files when the data is on disk. When a tool holds useful data only at runtime (tmux, ffmpeg, docker, ...), run it with fixed, read-only arguments through `src/background.rs`: never in the shell, never blocking completion. Never run `git`: repository config and hooks can execute code, and its data is readable from files.
 - Never log or persist command buffers. IPC stays private and messages bounded.
 
 ## Checks

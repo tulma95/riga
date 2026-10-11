@@ -1,15 +1,19 @@
 //! The built-in value sources a `.riga` spec can name (`<git-branch>`, `<cargo-package>`, ...): one
-//! token table, and exhaustive dispatch and path rules. Sources read local files and never depend
-//! on the spec model.
-use crate::{brew, cargo_toml, git, kube, names::Ref, npm, ollama, pyproject, rustup, vscode};
+//! token table, and exhaustive dispatch and path rules. Sources read local files (or, for tmux, ffmpeg
+//! and docker, cached background runs) and never depend on the spec model.
+use crate::{
+    background::Runs, brew, cargo_toml, docker, ffmpeg, git, kube, names::Ref, npm, ollama,
+    pyproject, rustup, tmux, vscode,
+};
 use std::path::Path;
 /// Everything a source may consult; all of it comes from the request or the engine, never from the
 /// daemon's own environment, so sources are injectable and testable.
 pub struct Env<'a> {
     pub cwd: &'a Path,
     pub home: &'a Path,
-    /// The shell's PATH, for sources that locate a tool (`brew`).
+    /// The shell's PATH, for sources that locate a tool (`brew`, `tmux`, `ffmpeg`, `docker`).
     pub path: &'a str,
+    pub runs: &'a Runs,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -22,6 +26,9 @@ pub enum Source {
     Ollama,
     Rustup(rustup::Kind),
     Vscode(vscode::Kind),
+    Tmux(tmux::Kind),
+    Ffmpeg(ffmpeg::Kind),
+    Docker(docker::Kind),
 }
 /// Spec value tokens (`<token>`) and their sources.
 const TOKENS: &[(&str, Source)] = &[
@@ -75,6 +82,38 @@ const TOKENS: &[(&str, Source)] = &[
     ("rustup-component", Source::Rustup(rustup::Kind::Component)),
     ("vscode-extension", Source::Vscode(vscode::Kind::Extension)),
     ("vscode-profile", Source::Vscode(vscode::Kind::Profile)),
+    ("tmux-session", Source::Tmux(tmux::Kind::Session)),
+    ("tmux-window", Source::Tmux(tmux::Kind::Window)),
+    ("tmux-pane", Source::Tmux(tmux::Kind::Pane)),
+    ("tmux-buffer", Source::Tmux(tmux::Kind::Buffer)),
+    ("ffmpeg-encoder", Source::Ffmpeg(ffmpeg::Kind::Encoder)),
+    (
+        "ffmpeg-video-encoder",
+        Source::Ffmpeg(ffmpeg::Kind::VideoEncoder),
+    ),
+    (
+        "ffmpeg-audio-encoder",
+        Source::Ffmpeg(ffmpeg::Kind::AudioEncoder),
+    ),
+    (
+        "ffmpeg-subtitle-encoder",
+        Source::Ffmpeg(ffmpeg::Kind::SubtitleEncoder),
+    ),
+    ("docker-container", Source::Docker(docker::Kind::Container)),
+    (
+        "docker-running-container",
+        Source::Docker(docker::Kind::Running),
+    ),
+    ("docker-image", Source::Docker(docker::Kind::Image)),
+    ("ffmpeg-format", Source::Ffmpeg(ffmpeg::Kind::Format)),
+    (
+        "ffmpeg-video-filter",
+        Source::Ffmpeg(ffmpeg::Kind::VideoFilter),
+    ),
+    (
+        "ffmpeg-audio-filter",
+        Source::Ffmpeg(ffmpeg::Kind::AudioFilter),
+    ),
 ];
 impl Source {
     pub fn parse(token: &str) -> Option<Source> {
@@ -92,6 +131,9 @@ impl Source {
             Source::Ollama => ollama::complete(env),
             Source::Rustup(k) => rustup::complete(env, k),
             Source::Vscode(k) => vscode::complete(env, k),
+            Source::Tmux(k) => tmux::complete(env, k),
+            Source::Ffmpeg(k) => ffmpeg::complete(env, k),
+            Source::Docker(k) => docker::complete(env, k),
         }
     }
     /// The suggestion kind shown for its candidates.
@@ -121,14 +163,22 @@ impl Source {
             | Source::Kube(_)
             | Source::Ollama
             | Source::Rustup(_)
-            | Source::Vscode(_) => false,
+            | Source::Vscode(_)
+            | Source::Tmux(_)
+            | Source::Ffmpeg(_)
+            | Source::Docker(_) => false,
         }
     }
 }
 /// Runs `f` with an environment for tests.
 #[cfg(test)]
 pub fn with_env<R>(cwd: &Path, home: &Path, path: &str, f: impl FnOnce(&Env) -> R) -> R {
-    f(&Env { cwd, home, path })
+    f(&Env {
+        cwd,
+        home,
+        path,
+        runs: &Runs::default(),
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -148,8 +198,11 @@ mod tests {
     fn missing_data_gives_only_built_in_candidates() {
         let nowhere = Path::new("/nonexistent-riga");
         for (token, source) in TOKENS {
-            // Brew falls back to the real prefixes.
-            if matches!(source, Source::Brew(_)) {
+            // Brew falls back to the real prefixes and the others start background runs.
+            if matches!(
+                source,
+                Source::Brew(_) | Source::Tmux(_) | Source::Ffmpeg(_)
+            ) {
                 continue;
             }
             let found = with_env(nowhere, nowhere, "", |env| source.complete(env));

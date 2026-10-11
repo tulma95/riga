@@ -77,13 +77,13 @@ Any line beginning with `#test` (after indentation) must be a valid test, so nea
 
 ## Built-in value sources
 
-Sources read local files and never run the tool. They use default locations under the home directory the daemon resolves for the user. Rules shared by all of them:
+Sources read local files and never run the tool, except tmux, ffmpeg and docker (see [Background tool runs](#background-tool-runs)). They use default locations under the home directory the daemon resolves for the user. Rules shared by all of them:
 
 - Only regular files are read. FIFOs, devices and directories with a manifest's name are ignored, so they cannot hang the worker.
 - Invalid UTF-8 is read lossily. Non-UTF-8 directory entries are skipped.
 - Names containing control or bidirectional characters, empty names, and names over 256 characters are dropped. Duplicates keep the first description. Descriptions are cut to 100 characters, and one with control or bidirectional characters is blanked.
 - Names are sorted, then capped, so an oversized source yields the first names alphabetically.
-- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR` and `$HOMEBREW_CACHE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir` or `--user-data-dir` in the buffer.
+- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR` and `$HOMEBREW_CACHE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir` or `--user-data-dir` in the buffer. tmux `-L`/`-S` sockets are not followed. Docker uses the daemon's own environment and the current context in `~/.docker/config.json`; the shell's `$DOCKER_HOST`/`$DOCKER_CONTEXT` and `-H`/`--context` in the buffer are not followed.
 - "Paths" below means file system paths are offered next to the values. Git tokens do so for positionals only, not flag values.
 
 | Token(s) | Lists | Read from | Paths | Not followed |
@@ -106,6 +106,9 @@ Sources read local files and never run the tool. They use default locations unde
 | `<rustup-target>`, `<rustup-component>` | Targets, components | Each toolchain's `lib/rustlib/components` | No | `$RUSTUP_HOME` |
 | `<vscode-extension>` | Installed extensions (skips `.obsolete` entries) | `~/.vscode/extensions` | No | `--extensions-dir` |
 | `<vscode-profile>` | Profile names | `userDataProfiles` in the first 1 MiB of VS Code's `storage.json` | No | `--user-data-dir` |
+| `<tmux-session>`, `<tmux-window>`, `<tmux-pane>`, `<tmux-buffer>` | Names on the default tmux server | Background run of `tmux list-... -F ...` | No | `-L`, `-S` |
+| `<ffmpeg-encoder>`, `<ffmpeg-video-encoder>`, `<ffmpeg-audio-encoder>`, `<ffmpeg-subtitle-encoder>`, `<ffmpeg-format>`, `<ffmpeg-video-filter>`, `<ffmpeg-audio-filter>` | What the local ffmpeg build supports | Background run of `ffmpeg -hide_banner -encoders` / `-formats` / `-filters` | No | |
+| `<docker-container>`, `<docker-running-container>`, `<docker-image>` | All containers, running containers (with status), tagged images (with size) | Background run of `docker ps -a` / `docker ps` / `docker images` with `--format` | No | The shell's `$DOCKER_HOST`, `-H`, `--context` |
 
 The Homebrew prefix is the one of the `brew` on the shell's PATH, else `/opt/homebrew`, then `/usr/local`.
 
@@ -118,3 +121,12 @@ Git values are read directly from the repository files, never by running `git`. 
 - `<git-remote>`: remotes from `.git/config` and fetched remote refs.
 
 Riga never fetches. Branches pushed by others appear after your own `git fetch` or `git pull`. Suggestions are capped at 20,000 refs and a 16 MiB `packed-refs`. Names with control or bidirectional characters are hidden. The bundled Git spec uses these for `checkout`, `switch`, `branch`, `rebase`, `restore --source`, `log`, `diff`, `fetch`, `pull` and `push`.
+
+### Background tool runs
+
+`<tmux-*>`, `<ffmpeg-*>` and `<docker-*>` run fixed, read-only list commands (`tmux list-sessions -F ...`, `ffmpeg -hide_banner -encoders`, `docker ps -a --format ...`, ...) on a background thread. The executable is found on the shell's PATH and started without a shell, in its own process group.
+
+- A run is killed after 3 seconds. Output is bounded (1 MiB, 5,000 lines). The cache holds at most 64 entries.
+- Completion never waits. Results are cached: 5 seconds for tmux and docker, 10 minutes for ffmpeg. If the Docker daemon is not reachable, runs fail: names from the last successful run stay listed until a run succeeds again, and none are shown if it never did.
+- A failed run keeps the previous values and is retried after 15 seconds.
+- The first request may show no values. The popup refreshes when a run finishes.

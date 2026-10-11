@@ -1,5 +1,6 @@
 //! Completion providers have no terminal or UI dependencies. Ranges count Unicode scalars, as ZLE does.
 use crate::{
+    background,
     protocol::State,
     sources::Env,
     spec::{self, Arg, Spec, Value, ValueSpec},
@@ -159,7 +160,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 12] = [
+const BUNDLED_SPECS: [(&str, &str); 14] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -189,6 +190,10 @@ const BUNDLED_SPECS: [(&str, &str); 12] = [
         include_str!("../data/specs/code.riga"),
     ),
     (
+        "data/specs/ffmpeg.riga",
+        include_str!("../data/specs/ffmpeg.riga"),
+    ),
+    (
         "data/specs/kubectl.riga",
         include_str!("../data/specs/kubectl.riga"),
     ),
@@ -203,6 +208,10 @@ const BUNDLED_SPECS: [(&str, &str); 12] = [
     (
         "data/specs/rustup.riga",
         include_str!("../data/specs/rustup.riga"),
+    ),
+    (
+        "data/specs/tmux.riga",
+        include_str!("../data/specs/tmux.riga"),
     ),
     ("data/specs/uv.riga", include_str!("../data/specs/uv.riga")),
 ];
@@ -402,6 +411,7 @@ pub struct Engine {
     filesystem: bool,
     /// Bundled specs apply only to commands found on the shell's PATH.
     installed_only: bool,
+    runs: background::Runs,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -423,6 +433,7 @@ impl Engine {
             specs: bundled_specs(),
             filesystem: true,
             installed_only: false,
+            runs: background::Runs::default(),
         }
     }
     fn scan_path(&mut self) {
@@ -471,6 +482,20 @@ impl Engine {
             .filter(|s| active(s))
             .map(|s| s.name().to_owned())
             .collect()
+    }
+    /// Called from a background thread when a tool-run value source has new results.
+    pub fn on_background_update(&mut self, f: impl Fn(&background::Key) + Send + Sync + 'static) {
+        self.runs.on_update(f);
+    }
+    /// Tool runs that the completions since the last call were waiting on.
+    pub fn take_background_wanted(&self) -> Vec<background::Key> {
+        self.runs.take_wanted()
+    }
+    pub fn background_running(&self, key: &background::Key) -> bool {
+        self.runs.is_running(key)
+    }
+    pub fn background_busy(&self) -> bool {
+        self.runs.busy()
     }
     pub fn complete(&mut self, state: &State) -> Vec<Suggestion> {
         let Some(c) = context(&state.buffer, state.cursor) else {
@@ -547,6 +572,7 @@ impl Engine {
                     cwd,
                     home: &self.home,
                     path: &self.path,
+                    runs: &self.runs,
                 };
                 (source.complete(&env), source.suggestion_kind())
             }
@@ -788,7 +814,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 12);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 14);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"

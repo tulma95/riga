@@ -1,6 +1,9 @@
+pub mod background;
 pub mod brew;
 pub mod cargo_toml;
 pub mod completion;
+pub mod docker;
+pub mod ffmpeg;
 pub mod fsio;
 pub mod git;
 pub mod json;
@@ -14,5 +17,6 @@ pub mod rustup;
 pub mod session;
 pub mod sources;
 pub mod spec;
+pub mod tmux;
 pub mod toml;
 pub mod vscode;

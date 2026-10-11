@@ -1,0 +1,86 @@
+# Original Riga completion spec for an FFmpeg subset (MIT). Format reference: docs/SPECS.md.
+# Encoders, formats and -vf/-af filter names come from the local `ffmpeg -encoders/-formats/-filters`; preset, profile and pixel format lists are common picks. Stream specifiers, full filter graphs and times are free text.
+# FFmpeg options are single-dash and never bundled. Per-stream forms are listed only for the common ones (-c:v, -b:a, ...).
+# Options that are often given once per input and once per output (-f, -ss, -t, -c, -map, ...) are `repeat`.
+command ffmpeg nobundle "Convert, record and stream audio and video"
+  flag -h|-help|--help "Show help (optionally for a topic such as encoder=libx264)"
+  flag -version "Show version and build configuration"
+  flag -formats "List available formats"
+  flag -codecs "List available codecs"
+  flag -encoders "List available encoders"
+  flag -decoders "List available decoders"
+  flag -filters "List available filters"
+  flag -pix_fmts "List available pixel formats"
+  flag -hwaccels "List available hardware acceleration methods"
+  flag -hide_banner "Do not print the build banner"
+  flag -loglevel|-v {quiet,panic,fatal,error,warning,info,verbose,debug,trace} "Set the logging level"
+  flag -stats "Print encoding progress"
+  flag -nostats "Do not print encoding progress"
+  flag -progress <url> "Write machine-readable progress to a URL or file"
+  flag -nostdin "Do not read from standard input"
+  flag -y excludes=-n "Overwrite output files without asking"
+  flag -n excludes=-y "Never overwrite output files"
+  flag -i <file> repeat "Input file or URL"
+  flag -f <ffmpeg-format> repeat "Force the container format of the next input or output"
+  flag -re "Read the next input at its native frame rate"
+  flag -stream_loop <count> repeat "Loop the next input this many times (-1 for forever)"
+  flag -hwaccel {auto,videotoolbox,cuda,vaapi,qsv,d3d11va,dxva2,vulkan,none} repeat "Hardware decoding for the next input"
+  flag -ss <position> repeat "Start at this time position (before -i seeks the input)"
+  flag -t <duration> repeat "Limit the duration read or written"
+  flag -to <position> repeat "Stop at this time position"
+  flag -map <stream> repeat "Select input streams for the next output"
+  flag -map_metadata <spec> repeat "Copy metadata from an input"
+  flag -map_chapters <index> repeat "Copy chapters from an input"
+  flag -metadata <key=value> repeat "Set a metadata value"
+  flag -c|-codec <ffmpeg-encoder> repeat "Codec for all streams ('copy' to keep them as is)"
+  flag -c:v|-codec:v|-vcodec <ffmpeg-video-encoder> repeat "Video codec"
+  flag -c:a|-codec:a|-acodec <ffmpeg-audio-encoder> repeat "Audio codec"
+  flag -c:s|-codec:s|-scodec <ffmpeg-subtitle-encoder> repeat "Subtitle codec"
+  flag -b:v <bitrate> repeat "Video bitrate, such as 2M"
+  flag -b:a|-ab <bitrate> repeat "Audio bitrate, such as 128k"
+  flag -maxrate <bitrate> repeat "Maximum bitrate"
+  flag -bufsize <size> repeat "Rate control buffer size"
+  flag -crf <quality> repeat "Constant rate factor (lower is better quality)"
+  flag -q:v|-qscale:v <quality> repeat "Fixed video quality scale"
+  flag -q:a|-qscale:a <quality> repeat "Fixed audio quality scale"
+  flag -preset {ultrafast,superfast,veryfast,faster,fast,medium,slow,slower,veryslow,placebo} repeat "Encoder speed and compression preset"
+  flag -tune {film,animation,grain,stillimage,fastdecode,zerolatency,psnr,ssim} repeat "Encoder tuning"
+  flag -profile:v {baseline,main,high,high10,high422,high444} repeat "Video codec profile"
+  flag -pix_fmt {yuv420p,yuv422p,yuv444p,yuv420p10le,nv12,rgb24,rgba,gray} repeat "Pixel format"
+  flag -r <rate> repeat "Frame rate"
+  flag -framerate <rate> repeat "Input frame rate for image sequences and devices"
+  flag -s <size> repeat "Frame size, such as 1280x720"
+  flag -aspect <ratio> repeat "Display aspect ratio, such as 16:9"
+  flag -frames:v|-vframes <count> repeat "Number of video frames to write"
+  flag -vf|-filter:v <ffmpeg-video-filter> repeat "Video filter graph"
+  flag -af|-filter:a <ffmpeg-audio-filter> repeat "Audio filter graph"
+  flag -filter_complex <filtergraph> repeat "Complex filter graph with multiple inputs or outputs"
+  flag -ar <rate> repeat "Audio sample rate in Hz"
+  flag -ac <channels> repeat "Number of audio channels"
+  flag -vn repeat "Drop video"
+  flag -an repeat "Drop audio"
+  flag -sn repeat "Drop subtitles"
+  flag -dn repeat "Drop data streams"
+  flag -shortest repeat "Finish when the shortest stream ends"
+  flag -movflags <flags> repeat "MP4/MOV muxer flags, such as +faststart"
+  flag -threads <count> repeat "Number of threads"
+  flag -copyts "Keep input timestamps"
+  flag -avoid_negative_ts {auto,make_non_negative,make_zero,disabled} repeat "Shift timestamps so none are negative"
+  arg <file> repeat "Output file"
+#test "ffmpeg " => +-i +-c:v +-hide_banner +--help
+#test "ffmpeg -i " => --y -libx264
+#test "ffmpeg -i in.mp4 -c:v " => --i --map
+#test "ffmpeg -c:a aac -f mp4 -vf scale=640:-1 -" => +-c:v +-i +-af
+#test "ffmpeg -i in.mp4 -preset s" => +slow +superfast -medium
+#test "ffmpeg -loglevel e" => +error -debug
+#test "ffmpeg -i a.mp4 -i b.mp4 -" => +-i +-map
+#test "ffmpeg -y -" => --y --n +-i
+#test "ffmpeg -n" => +-n +-nostdin +-nostats
+#test "ffmpeg -n -" => --n --y
+#test "ffmpeg -vcodec libx264 -c" => +-c:v +-c:a
+#test "ffmpeg -crf 23 -" => +-crf
+#test "ffmpeg -v " => +quiet +debug --i
+#test "ffmpeg -i in.mkv -c:v copy out.mp4 -" => +-map +-i
+#test "ffmpeg -i in.mkv out.mp4 -y" => +-y
+#test "ffmpeg -hide_banner -" => ---hide_banner +-i
+#test "ffmpeg -pix_fmt y" => +yuv420p -rgb24
