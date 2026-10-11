@@ -13,6 +13,15 @@ Riga is an autocomplete popup for **zsh in iTerm2 on macOS**, written in Rust. A
 
 macOS, iTerm2, zsh, Xcode Command Line Tools and Rust (edition 2024). There are no Cargo dependencies.
 
+## Install with Homebrew
+
+```zsh
+brew tap tulma95/riga https://github.com/tulma95/riga
+brew install riga
+echo 'source $(brew --prefix)/opt/riga/share/riga/riga.zsh' >> ~/.zshrc
+riga doctor
+```
+
 ## Quick start
 
 ```zsh
