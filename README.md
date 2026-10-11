@@ -19,11 +19,10 @@ macOS, iTerm2, zsh, Xcode Command Line Tools and Rust (edition 2024). There are 
 cargo build --release
 export RIGA_BIN="$PWD/target/release/riga"
 "$RIGA_BIN" doctor
-"$RIGA_BIN" serve &
-source "$PWD/shell/riga.zsh"
+source "$PWD/shell/riga.zsh"   # starts `riga serve` in the background if it isn't running
 ```
 
-Type `git st` or `cd ` and the popup appears. The server must keep running. While it does, a menu bar icon shows its status.
+Type `git st` or `cd ` and the popup appears. While the server runs, a menu bar icon shows its status.
 
 Riga needs two macOS permissions for the app that launches it (iTerm2): **Accessibility**, to find the caret, and **Automation**, to ask iTerm2 for the active pane. `riga doctor` checks setup. `riga probe` prints the real caret geometry, or why the popup is suppressed.
 
@@ -34,7 +33,7 @@ Riga needs two macOS permissions for the app that launches it (iTerm2): **Access
 ./scripts/install.sh --uninstall  # removes it
 ```
 
-This is idempotent and does not start the server. Details are in [docs/USAGE.md](docs/USAGE.md).
+This is idempotent. Every new iTerm2 shell then starts the server when it isn't already running (`RIGA_AUTOSTART=0` turns that off). Details are in [docs/USAGE.md](docs/USAGE.md).
 
 ## Keys
 

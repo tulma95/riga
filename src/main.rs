@@ -13,7 +13,7 @@ use std::{
     os::{
         fd::AsRawFd,
         unix::{
-            fs::{MetadataExt, PermissionsExt},
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
             net::{UnixListener, UnixStream},
         },
     },
@@ -173,6 +173,18 @@ fn bind() -> io::Result<UnixListener> {
             "Socket parent must be a real directory owned by you with mode 0700",
         ));
     }
+    // Shells start the server on load, often several at once; the lock makes
+    // the stale-socket check and rebind below race-free. Held until exit.
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(parent.join("lock"))?;
+    if lock.try_lock().is_err() {
+        return Err(io::Error::other("A Riga server is already running"));
+    }
+    std::mem::forget(lock);
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             return Err(io::Error::other("A Riga server is already running"));

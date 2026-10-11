@@ -9,17 +9,18 @@ From an iTerm2 zsh prompt in a checkout (after `cargo build --release`):
 ```zsh
 export RIGA_BIN="$PWD/target/release/riga"
 "$RIGA_BIN" doctor
-"$RIGA_BIN" serve &
 source "$PWD/shell/riga.zsh"
 ```
 
-Type `git st`, `cd ` or the prefix of a command. The server must remain running. Return keeps its ordinary execute behavior. The popup does not take keyboard focus or handle mouse clicks. When the popup is hidden, each installed key delegates to its previous ZLE widget or macro.
+Sourcing `riga.zsh` starts `riga serve` in the background when no server answers on the socket, and logs to `$TMPDIR/riga-serve.log`. Because it is started from iTerm2, iTerm2's Accessibility and Automation permissions cover it. Starting several shells at once is safe: extra servers exit on a lock in the socket directory. The server then keeps running after the shell closes. The first prompt of the shell that started it may show no popup until the server is listening. Set `RIGA_AUTOSTART=0` before sourcing to start the server yourself. Riga deliberately installs no launchd agent: a server started by launchd would not run under iTerm2's permissions.
+
+Type `git st`, `cd ` or the prefix of a command. Return keeps its ordinary execute behavior. The popup does not take keyboard focus or handle mouse clicks. When the popup is hidden, each installed key delegates to its previous ZLE widget or macro.
 
 While `riga serve` is running, a terminal icon appears in the macOS menu bar. Click it to see the running status or choose **Quit Riga**. The icon disappears when the server exits. Diagnostic commands (`doctor` and `probe`) do not add an icon.
 
 ## Natural language to command
 
-On by default. To turn it off, set `RIGA_AI=0` in the environment of `riga serve` (for example `RIGA_AI=0 "$RIGA_BIN" serve &`); `#` lines then show no popup. It is a daemon setting rather than a shell setting because the daemon runs the model, and keeping it there leaves the shell protocol unchanged. Requirements: Apple Intelligence enabled on a supported Mac, and the `fm` license accepted once with `sudo fm license`. If the model is unavailable, the popup says so.
+On by default. To turn it off, set `RIGA_AI=0` in the environment of `riga serve` (export it in `.zshrc` before `riga.zsh` so an auto-started server inherits it, or run `RIGA_AI=0 "$RIGA_BIN" serve &` yourself); `#` lines then show no popup. It is a daemon setting rather than a shell setting because the daemon runs the model, and keeping it there leaves the shell protocol unchanged. Requirements: Apple Intelligence enabled on a supported Mac, and the `fm` license accepted once with `sudo fm license`. If the model is unavailable, the popup says so.
 
 A line that starts with `# ` followed by at least three words is a request. About 400 ms after the last keystroke, Riga asks the on-device model (`/usr/bin/fm respond --model system --greedy`, with guided generation) for up to three commands. Only one run is in flight at a time, and a run is killed after 8 seconds. The prompt contains the request, the current directory's name and the names of installed tools that have bundled specs. It never contains file contents or history. The prompt goes to `fm` on stdin, so it doesn't appear in `ps`. Prompts and replies are kept only in a 32-entry in-memory cache and are never logged.
 
@@ -43,9 +44,9 @@ Make the release binary available as `riga` on your zsh PATH, or set an absolute
 ./scripts/install.sh --uninstall            # removes only the managed block
 ```
 
-Installation and removal are idempotent, preserve permissions, and retain a first-install `.riga-backup`. The installer refuses symlink destinations and malformed managed blocks. It does not start a daemon or alter system permissions. Keep the checkout at its installed path, or rerun the installer after moving it. Source after other ZLE customizations. Existing additive ZLE hooks, including iTerm2 shell integration, remain installed.
+Installation and removal are idempotent, preserve permissions, and retain a first-install `.riga-backup`. The installer refuses symlink destinations and malformed managed blocks. It does not alter system permissions; the sourced script starts the server on demand (see above). Keep the checkout at its installed path, or rerun the installer after moving it. Source after other ZLE customizations. Existing additive ZLE hooks, including iTerm2 shell integration, remain installed.
 
-In an already open shell, `riga-unload` removes Riga's hooks, closes its connection, and restores keys. Stop the background `riga serve` process with the shell job's normal `kill %job-number`, or Ctrl-C when running it in the foreground. Restarting handles a stale socket safely.
+In an already open shell, `riga-unload` removes Riga's hooks, closes its connection, and restores keys. Stop the server with **Quit Riga** in its menu bar icon; the next shell that loads Riga starts it again. Restarting handles a stale socket safely.
 
 ## Keys and socket
 
@@ -73,11 +74,11 @@ AppKit points are converted from AX's top-left coordinate system into the primar
 
 The parser handles ordinary commands, quoted/escaped paths, Unicode scalar offsets, command separators and middle-of-token replacement. It deliberately suppresses substitutions, unquoted globbing, redirects, assignments and other unsupported syntax rather than inventing replacement ranges. It does not resolve aliases or functions, named-user tilde expansion, shell expansions or remote sessions. tmux is supported only as a tool to complete (`tmux ...` commands), not as a pane host. Non-UTF-8 filenames are skipped. New files in a directory appear on the next edit. Executable discovery has a 30-second cache and each directory scan is capped at 20,000 entries. Results are capped at 64 with seven rows visible.
 
-No command buffers are logged or persisted. Local IPC is protected by a `0700` parent and `0600` socket. Other processes running as your own user are within this prototype's trust boundary. Shell frames are capped at 64 KiB. Buffers above 16,384 characters suppress completion. Disconnection reconnects at the next command prompt. The server is manually started. There is no background agent installation, update service, cloud account, telemetry or global key monitor. AI suggestions are on-device only.
+No command buffers are logged or persisted. Local IPC is protected by a `0700` parent and `0600` socket. Other processes running as your own user are within this prototype's trust boundary. Shell frames are capped at 64 KiB. Buffers above 16,384 characters suppress completion. Disconnection reconnects at the next command prompt. The server is started by the shell integration, not a launch agent. There is no background agent installation, update service, cloud account, telemetry or global key monitor. AI suggestions are on-device only.
 
 ## Not yet verified live
 
-Live checks passed on one Retina display with iTerm2 3.7.2. Still unverified: multiline paste, reverse search, visual widths of non-CJK Unicode, focus changes into settings/search and terminal text selection, full-screen apps, multiple displays (mixed scaling, negative origins, fullscreen Spaces), and revoking permissions mid-edit. Focus tracking polls about every 70 ms, so focus transitions have finite detection latency. AI suggestions were checked live only on macOS 27.0.1 with one Apple Silicon Mac. Requests are expected in English. Still unverified: Apple Intelligence turned off or still downloading.
+Live checks passed on one Retina display with iTerm2 3.7.2. Still unverified: multiline paste, reverse search, visual widths of non-CJK Unicode, focus changes into settings/search and terminal text selection, full-screen apps, multiple displays (mixed scaling, negative origins, fullscreen Spaces), and revoking permissions mid-edit. Focus tracking polls about every 70 ms, so focus transitions have finite detection latency. AI suggestions were checked live only on macOS 27.0.1 with one Apple Silicon Mac. Requests are expected in English. Still unverified: Apple Intelligence turned off or still downloading. Server auto-start is untested live: that Accessibility and Automation still apply to an auto-started server, and that it survives closing its shell and quitting iTerm2.
 
 ## Tests
 

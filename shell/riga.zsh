@@ -1,5 +1,5 @@
 # Riga's optional iTerm2 integration. Source after other ZLE customizations.
-# Settings (set before sourcing): RIGA_BIN, RIGA_SOCKET, RIGA_KEY_NEXT,
+# Settings (set before sourcing): RIGA_BIN, RIGA_SOCKET, RIGA_AUTOSTART, RIGA_KEY_NEXT,
 # RIGA_KEY_PREV, RIGA_KEY_ACCEPT, RIGA_KEY_DISMISS. Keys use bindkey syntax.
 [[ -o interactive && ${TERM_PROGRAM-} == iTerm.app && -n ${ITERM_SESSION_ID-} ]] || return 0
 (( ${+_RIGA_LOADED} )) && return 0
@@ -18,6 +18,18 @@ _RIGA_OLD_MACRO=()
 _RIGA_BINDINGS=()
 : ${RIGA_BIN:=riga} ${RIGA_SOCKET:=/tmp/riga-${UID}/socket}
 : ${RIGA_KEY_NEXT:='^N'} ${RIGA_KEY_PREV:='^P'} ${RIGA_KEY_ACCEPT:='^I'} ${RIGA_KEY_DISMISS:='^G'}
+: ${RIGA_AUTOSTART:=1}
+
+# Start the server when none answers, detached so loading never waits. Started
+# from iTerm2, it gets iTerm2's permissions. Concurrent starts exit on its lock.
+[[ $RIGA_AUTOSTART == 1 ]] && () {
+  local REPLY
+  if zsocket "$RIGA_SOCKET" 2>/dev/null; then
+    exec {REPLY}>&-
+  else
+    nohup "$RIGA_BIN" serve </dev/null >>"${${TMPDIR:-/tmp}%/}/riga-serve.log" 2>&1 &!
+  fi
+}
 
 _riga_encode() {
   REPLY=${1//\%/%25}

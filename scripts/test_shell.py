@@ -81,7 +81,7 @@ def check_zle(tmp):
     thread.start()
     pid, terminal = pty.fork()
     if pid == 0:
-        os.environ.update(TERM="xterm-256color", TERM_PROGRAM="iTerm.app", ITERM_SESSION_ID="w0t0p0:test-pane", RIGA_SOCKET=str(endpoint), RIGA_BIN=str(helper))
+        os.environ.update(TERM="xterm-256color", TERM_PROGRAM="iTerm.app", ITERM_SESSION_ID="w0t0p0:test-pane", RIGA_SOCKET=str(endpoint), RIGA_BIN=str(helper), RIGA_AUTOSTART="0")
         os.execvp("zsh", ["zsh", "-f"])
     os.set_blocking(terminal, False)
     captured = bytearray()
