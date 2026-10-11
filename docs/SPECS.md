@@ -85,7 +85,7 @@ Sources read local files and never run the tool, except tmux, ffmpeg and docker 
 - Invalid UTF-8 is read lossily. Non-UTF-8 directory entries are skipped.
 - Names containing control or bidirectional characters, empty names, and names over 256 characters are dropped. Duplicates keep the first description. Descriptions are cut to 100 characters, and one with control or bidirectional characters is blanked.
 - Names are sorted, then capped, so an oversized source yields the first names alphabetically.
-- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR` and `$HOMEBREW_CACHE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir` or `--user-data-dir` in the buffer. tmux `-L`/`-S` sockets are not followed. Docker uses the daemon's own environment and the current context in `~/.docker/config.json`; the shell's `$DOCKER_HOST`/`$DOCKER_CONTEXT` and `-H`/`--context` in the buffer are not followed.
+- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR`, `$HOMEBREW_CACHE`, `$AWS_CONFIG_FILE` and `$AWS_SHARED_CREDENTIALS_FILE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir` or `--user-data-dir` in the buffer. tmux `-L`/`-S` sockets are not followed. Docker uses the daemon's own environment and the current context in `~/.docker/config.json`; the shell's `$DOCKER_HOST`/`$DOCKER_CONTEXT` and `-H`/`--context` in the buffer are not followed.
 - "Paths" below means file system paths are offered next to the values. Git tokens do so for positionals only, not flag values.
 
 | Token(s) | Lists | Read from | Paths | Not followed |
@@ -108,6 +108,7 @@ Sources read local files and never run the tool, except tmux, ffmpeg and docker 
 | `<rustup-target>`, `<rustup-component>` | Targets, components | Each toolchain's `lib/rustlib/components` | No | `$RUSTUP_HOME` |
 | `<vscode-extension>` | Installed extensions (skips `.obsolete` entries) | `~/.vscode/extensions` | No | `--extensions-dir` |
 | `<vscode-profile>` | Profile names | `userDataProfiles` in the first 1 MiB of VS Code's `storage.json` | No | `--user-data-dir` |
+| `<aws-profile>`, `<aws-sso-session>` | Profiles (`[default]`, `[profile X]`, and credentials `[X]`), `[sso-session X]` names | `~/.aws/config`, `~/.aws/credentials` (1 MiB each, 5,000 names). AWS is never contacted. | No | `$AWS_CONFIG_FILE`, `$AWS_SHARED_CREDENTIALS_FILE` |
 | `<tmux-session>`, `<tmux-window>`, `<tmux-pane>`, `<tmux-buffer>` | Names on the default tmux server | Background run of `tmux list-... -F ...` | No | `-L`, `-S` |
 | `<ffmpeg-encoder>`, `<ffmpeg-video-encoder>`, `<ffmpeg-audio-encoder>`, `<ffmpeg-subtitle-encoder>`, `<ffmpeg-format>`, `<ffmpeg-video-filter>`, `<ffmpeg-audio-filter>` | What the local ffmpeg build supports | Background run of `ffmpeg -hide_banner -encoders` / `-formats` / `-filters` | No | |
 | `<docker-container>`, `<docker-running-container>`, `<docker-image>` | All containers, running containers (with status), tagged images (with size) | Background run of `docker ps -a` / `docker ps` / `docker images` with `--format` | No | The shell's `$DOCKER_HOST`, `-H`, `--context` |

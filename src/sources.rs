@@ -2,7 +2,7 @@
 //! token table, and exhaustive dispatch and path rules. Sources read local files (or, for tmux, ffmpeg
 //! and docker, cached background runs) and never depend on the spec model.
 use crate::{
-    background::Runs, brew, cargo_toml, docker, ffmpeg, git, kube, names::Ref, npm, ollama,
+    aws, background::Runs, brew, cargo_toml, docker, ffmpeg, git, kube, names::Ref, npm, ollama,
     pyproject, rustup, terraform, tmux, vscode,
 };
 use std::path::Path;
@@ -30,6 +30,7 @@ pub enum Source {
     Ffmpeg(ffmpeg::Kind),
     Docker(docker::Kind),
     Terraform(terraform::Kind),
+    Aws(aws::Kind),
 }
 /// Spec value tokens (`<token>`) and their sources.
 const TOKENS: &[(&str, Source)] = &[
@@ -106,6 +107,8 @@ const TOKENS: &[(&str, Source)] = &[
         Source::Docker(docker::Kind::Running),
     ),
     ("docker-image", Source::Docker(docker::Kind::Image)),
+    ("aws-profile", Source::Aws(aws::Kind::Profile)),
+    ("aws-sso-session", Source::Aws(aws::Kind::SsoSession)),
     ("ffmpeg-format", Source::Ffmpeg(ffmpeg::Kind::Format)),
     (
         "ffmpeg-video-filter",
@@ -148,6 +151,7 @@ impl Source {
             Source::Ffmpeg(k) => ffmpeg::complete(env, k),
             Source::Docker(k) => docker::complete(env, k),
             Source::Terraform(k) => terraform::complete(env, k),
+            Source::Aws(k) => aws::complete(env, k),
         }
     }
     /// The suggestion kind shown for its candidates.
@@ -181,7 +185,8 @@ impl Source {
             | Source::Tmux(_)
             | Source::Ffmpeg(_)
             | Source::Docker(_)
-            | Source::Terraform(_) => false,
+            | Source::Terraform(_)
+            | Source::Aws(_) => false,
         }
     }
 }

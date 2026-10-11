@@ -162,7 +162,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 16] = [
+const BUNDLED_SPECS: [(&str, &str); 17] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -223,6 +223,10 @@ const BUNDLED_SPECS: [(&str, &str); 16] = [
     (
         "data/specs/curl.riga",
         include_str!("../data/specs/curl.riga"),
+    ),
+    (
+        "data/specs/aws.riga",
+        include_str!("../data/specs/aws.riga"),
     ),
 ];
 fn bundled_specs() -> Vec<Spec> {
@@ -937,7 +941,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 16);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 17);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"
@@ -2023,6 +2027,15 @@ command t "Test tool"
             described("kubectl --context "),
             [("minikube".into(), "Current kubeconfig context".into())]
         );
+        fs::create_dir_all(home.join(".aws")).unwrap();
+        fs::write(home.join(".aws/config"), "[profile dev]\n").unwrap();
+        fs::write(home.join(".aws/credentials"), "[ci]\n").unwrap();
+        let profiles: Vec<_> = described("aws s3 ls --profile ")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(profiles, ["ci", "dev"]);
+        assert_eq!(described("aws --profile=d")[0].0, "dev");
         let namespaces = described("kubectl get pods -n ");
         assert_eq!(namespaces[0].0, "web");
         assert_eq!(
