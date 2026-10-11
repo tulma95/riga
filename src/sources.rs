@@ -137,6 +137,11 @@ impl Source {
     pub fn parse(token: &str) -> Option<Source> {
         TOKENS.iter().find(|(t, _)| *t == token).map(|&(_, s)| s)
     }
+    /// Whether `label` starts like a source token (`git-...`), which marks a typo when it is not one.
+    pub fn family(label: &str) -> bool {
+        let prefix = label.split_once('-').map(|(prefix, _)| prefix);
+        prefix.is_some_and(|p| TOKENS.iter().any(|(t, _)| t.split('-').next() == Some(p)))
+    }
     /// Candidates sorted by name and capped; empty when the underlying data is missing.
     pub fn complete(self, env: &Env) -> Vec<Ref> {
         match self {

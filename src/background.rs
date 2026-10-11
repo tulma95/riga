@@ -69,6 +69,15 @@ impl Default for Runs {
     }
 }
 impl Runs {
+    /// Like `default`, except that runs `custom` recognizes (`Some`) are answered by it instead of
+    /// starting a tool.
+    pub fn with_custom(
+        custom: impl Fn(&str, &[String]) -> Option<Option<Vec<String>>> + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_exec(move |path, argv| {
+            custom(path, argv).unwrap_or_else(|| run(path, argv, None, TIMEOUT))
+        })
+    }
     pub fn with_exec(
         exec: impl Fn(&str, &[String]) -> Option<Vec<String>> + Send + Sync + 'static,
     ) -> Self {

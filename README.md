@@ -6,7 +6,7 @@ Riga is an autocomplete popup for **zsh in iTerm2 on macOS**, written in Rust. A
 
 - Executables on your PATH, and files and directories (including `cd`).
 - Bundled completion specs for common CLI tools (see `data/specs/`): subcommands, flags, choices and descriptions.
-- Real names where a spec asks for them, such as branches, scripts, packages and contexts. Most are read from local files; a few come from read-only list commands run in the background.
+- Real names where a spec asks for them, such as branches, scripts, packages and contexts. Most are read from local files; a few come from read-only list commands run in the background. For `aws`, every service, operation and flag is read from the installed AWS CLI v2's own data files.
 - Type `# list listening ports` to get commands suggested by Apple's on-device model (see below).
 
 ## Requirements

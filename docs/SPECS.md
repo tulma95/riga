@@ -22,7 +22,7 @@ command docker "Manage containers"
 
 | Statement | Form | Attributes |
 | --- | --- | --- |
-| `command` | `command NAME[\|ALIAS...]` | `nobundle`: no multi-flag short bundles at this level (attached values such as `-Cdir` still work) |
+| `command` | `command NAME[\|ALIAS...]` | `nobundle`: no multi-flag short bundles at this level (attached values such as `-Cdir` still work). `open`: words the command does not know do not end completion (see [Open commands](#open-commands)) |
 | `flag` | `flag NAME[\|ALIAS...] [VALUE]` | `repeat`, `persistent` (also visible in subcommands), `chdir` (needs `<directory>`; later paths resolve from it), `requires=--a,--b` (hidden until all are used), `excludes=--a` (symmetric) |
 | `arg` | `arg VALUE` | `repeat` (absorbs the remaining positionals; must be last), `stop` (after this arg, stop option parsing and spec suggestions; any later args document usage only and are not completed) |
 
@@ -30,7 +30,7 @@ command docker "Manage containers"
 
 - `<file>` and `<directory>` use the filesystem provider.
 - `<git-...>`, `<npm-...>`, `<cargo-...>` and the other built-in tokens read local data. See [Built-in value sources](#built-in-value-sources).
-- Any other `<label>` is free text.
+- Any other `<label>` is free text, except that a label starting like a built-in token family (`git-`, `npm-`, `cargo-`, `py-`, `uv-`, `brew-`, `kube-`, `ollama-`, `rustup-`, `vscode-`, `aws-`, `cdk-`, `tmux-`, `ffmpeg-`, `docker-`, `terraform-`) must be one of the tokens, so a typo such as `<git-brnach>` is a load error instead of silently completing nothing.
 - `{a,b,c}` lists choices.
 - `[VALUE]` makes a value optional. An optional flag value is only recognized attached (`--color=auto`) and never consumes the next word. On an arg, `[]` is documentation only, since positionals always fill args in order.
 
@@ -39,16 +39,15 @@ command docker "Manage containers"
 - Depth 0 is exactly one `command`, the executable name. Only commands have children.
 - Command names must not start with `-`. Flag names must.
 - `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split. A value-taking one also accepts an attached `=` value (`-var-file=dev.tfvars`), while `-x=v` keeps `=v` as the value.
-- Names use only alphanumerics and `-_.:+@%/`, so an option such as curl's `-#` cannot be declared (the curl spec offers `--progress-bar` instead).
-- `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split.
-- Load errors: duplicate spellings in one scope or statement, duplicate attributes or references, unresolved `requires`/`excludes` references, unknown keywords or attributes, a description without a statement, and empty choices. They are reported as `file:line: message`, sorted by line, at most 100 per file. Children of a rejected `command` are skipped rather than reported.
+- Names use only alphanumerics and `-_.:+@%/#`, with `#` not first (so curl's `-#` can be declared). Such names are inserted quoted (`'-#'`), since an unquoted `#` (a glob character under `extendedglob`) stops completion for the line.
+- Load errors: duplicate spellings in one scope or statement, duplicate attributes or references, unresolved `requires`/`excludes` references, unknown keywords or attributes, an unknown `<family-...>` value source, a description without a statement, and empty choices. They are reported as `file:line: message`, sorted by line, at most 100 per file. Children of a rejected `command` are skipped rather than reported.
 - A leading UTF-8 byte order mark is ignored.
-- Limits: nesting depth 32, at most 64 names per statement and 128 characters per name, descriptions of at most 200 characters without control or bidirectional characters (choices are checked the same way), 1 MiB per file. The number of flags, subcommands and choices is not capped. Completion ranks lightweight candidates and builds at most 64 suggestions.
+- Limits: nesting depth 32, at most 64 names per statement and 128 characters per name, descriptions of at most 200 characters without control or bidirectional characters (choices are checked the same way), 1 MiB per file. The number of flags, subcommands and choices is not capped. Completion ranks lightweight candidates and builds at most 128 suggestions.
 - Choices have no per-choice descriptions. Test expectation labels cannot contain spaces.
 
 ## How completion follows the words
 
-- A word matching a subcommand descends, only before the current command has consumed a positional. Visible flags are the current command's plus ancestors' `persistent` flags. Other ancestor flags are valid only before descending (`git -C dir status`, but not `git status -C dir`).
+- A word matching a subcommand descends, only before the current command has consumed a positional. Visible flags are the current command's plus ancestors' `persistent` flags. Other ancestor flags are valid only before descending (`git -C dir status`, but not `git status -C dir`). In the popup, an exact match comes first, then values, then subcommands and the command's own flags, then directories and files, and last the inherited `persistent` flags, so a long list is cut at 128 suggestions from the inherited flags first.
 - Used non-`repeat` flags disappear under every spelling. `git status --short ` still offers `--branch`. `git commit -m "First" ` offers another `--message`.
 - Flag values: choices are offered as `value` suggestions (`git log --pretty=on` gives `--pretty=oneline`). `<file>`/`<directory>` use the filesystem. Other text values offer nothing.
 - Positionals fill `arg`s in order. Choice args offer only their choices. `<directory>` args offer only directories. Text and Git args still offer paths after their own suggestions. A leaf without declared args accepts any positionals. An unknown word after a command that has subcommands but no args stops spec suggestions.
@@ -56,6 +55,16 @@ command docker "Manage containers"
 - Filesystem suggestions are suppressed after a completed `chdir` value (such as `git -C`) beginning with `~`, whose original quoting cannot be established from the decoded preceding tokens. Use an absolute path for that case.
 - The spec is chosen by the first word only, so wrappers such as `sudo git ...`, `env ... git` or `command git` get no spec completion.
 - Specs cannot run code, shell generators or callbacks. Dynamic values come only from the built-in sources below.
+
+### Open commands
+
+A command marked `open` (the root of `aws.riga`) tolerates words it has no spec for, which is how `aws rds ...` keeps completing global options when the installed AWS CLI's data cannot be read. In an open command:
+
+- A word that is not a known subcommand is skipped, not fatal. It counts as a positional, so the command's subcommands are no longer offered, and only its `persistent` flags stay visible.
+- An unknown `--option` stays enabled, and a following word that does not start with `-` is taken as its value (`--opt=value` takes none).
+- `unknown` is never set, so AI suggestions in an open scope are not rejected for unknown words.
+
+Subcommands that the spec does know are not open: `aws s3 --nope` still stops completion. Whether `aws` is open depends on the installed CLI, see [AWS CLI services](#aws-cli-services).
 
 ## Bundled specs and tools
 
@@ -77,6 +86,19 @@ Any line beginning with `#test` (after indentation) must be a valid test, so nea
 
 `cargo test` runs every bundled `#test`. `riga check-spec` runs them for any spec.
 
+## AWS CLI services
+
+`aws.riga` holds the global options, the hand-written commands (`s3`, `configure`, `sso`, `logs tail`, `cloudformation deploy`/`package`/`wait`, `eks update-kubeconfig`) and a few customized API operations. Everything else is generated at runtime from the AWS CLI v2 installed on the machine; nothing from AWS is bundled in this repository and `aws` is never run.
+
+- **Where.** `aws` is resolved on the shell's PATH and its symlinks are followed. Up to six directories above the real executable are searched for `awscli/botocore/data`, `dist/awscli/botocore/data` (the official package, `/usr/local/aws-cli/v2/<version>/dist`) or `lib/python3*/site-packages/awscli/botocore/data` and `libexec/lib/python3*/site-packages/...` (Homebrew). The lookup repeats every 30 seconds and when PATH changes, and the data is read again when the data directory's or the real executable's path or modification time changes (a reinstall or new version). A model file edited in place under an unchanged directory mtime is not noticed until the daemon restarts.
+- **What.** `<service>/<newest api-version>/service-2.json` and `paginators-1.json` (8 MiB and 1 MiB per file, regular files only). Services are named as the CLI names them (`s3` is `s3api`, `codedeploy` is `deploy`, `config` is `configservice`, `agenttoolkit` is `agent-toolkit`, `eventbridgev2` is `eventsv2`). Operation and flag names follow botocore's `xform_name`. Input members become `--flags`: booleans also get `--no-flag` (exclusive), enums become choices, lists repeat, others are free text. The CLI's `--cli-input-json`, `--cli-input-yaml`, `--generate-cli-skeleton` and, for paginated operations, `--starting-token`, `--max-items` and (when the paginator has a `limit_key`) `--page-size` are added. An operation with a blob response takes an `<outfile>` argument instead of the input-file flags. Blob members and `--cli-input-json`/`--cli-input-yaml` complete file paths (the CLI also accepts `file://` and `fileb://`, which are not offered). A few flags the CLI spells differently from the model are renamed from a small table (`--no-egress` is `--ingress`, `ec2 create-image`'s negated `NoReboot` is `--reboot`, `sns subscribe --endpoint` is `--notification-endpoint`, ...). Descriptions are the first sentence of the HTML documentation, cut to 100 characters.
+- **Merging.** An operation that `aws.riga` also defines keeps its own flags, arguments and subcommands (its description and value sources win per flag spelling) and gains the generated flags it lacks; the other generated operations are added whole. `aws <TAB>` lists all installed services next to the curated commands. Event stream operations, the operations the CLI removes (`ses verify-email-address`, `ec2 import-instance`, most of `emr`'s legacy commands, `kinesis subscribe-to-shard`) and member flags named like a global option (`--version`, `--query`, ...) are left out. Waiters are not read; `aws <service> wait` is only completed where `aws.riga` has it. Up to 16 service specs are kept.
+- **Background.** Reading `ec2`'s 4 MiB model takes about 35 ms, so builds run on a background thread through the same machinery as [tool runs](#background-tool-runs) and never block completion. Until the service list is read, and until a service's operations are read, the curated spec answers and the popup refreshes when the build finishes. AI suggestions for `aws` are checked against the merged spec: with data, a service or operation the CLI lacks is rejected, and while the data is still being read every `aws` suggestion is rejected (the build is started, and the retry when it finishes decides).
+- **Without data** (no `aws`, or an install elsewhere), `aws` stays `open`: unknown services and operations do not end completion, only the global options are offered, and AI suggestions for them are accepted.
+- **Not followed:** `$AWS_DATA_PATH`, the `.json.gz` models some builds may ship, pip or other custom installs outside the layouts above, and the CLI's own customizations beyond those in `aws.riga` (`--count` and friends are known only for `ec2 run-instances`). A few flags differ from the CLI's: a member that the CLI renames (`--version` to `--api-version`) is left out, and `--no-` flags of boolean attribute structures (`ec2 modify-vpc-attribute`) are missing. Flag lists such as `--instance-ids a b` are completed for the first value only, since a flag takes one value in a spec; the second reads as a positional.
+
+`RIGA_AWS_ORACLE=<dir with botocore/ and clidata/ac.index> cargo test generated_names -- --nocapture` compares generated services, operations and flags with the CLI's own autocomplete index (needs the `sqlite3` tool; skipped otherwise).
+
 ## Built-in value sources
 
 Sources read local files and never run the tool, except tmux, ffmpeg and docker (see [Background tool runs](#background-tool-runs)). They use default locations under the home directory the daemon resolves for the user. Rules shared by all of them:
@@ -85,7 +107,7 @@ Sources read local files and never run the tool, except tmux, ffmpeg and docker 
 - Invalid UTF-8 is read lossily. Non-UTF-8 directory entries are skipped.
 - Names containing control or bidirectional characters, empty names, and names over 256 characters are dropped. Duplicates keep the first description. Descriptions are cut to 100 characters, and one with control or bidirectional characters is blanked.
 - Names are sorted, then capped, so an oversized source yields the first names alphabetically.
-- The daemon does not see the shell's environment (other than PATH). `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR`, `$HOMEBREW_CACHE`, `$AWS_CONFIG_FILE` and `$AWS_SHARED_CREDENTIALS_FILE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir`, `--user-data-dir` or `cdk --output` in the buffer. tmux `-L`/`-S` sockets are not followed. Docker uses the daemon's own environment and the current context in `~/.docker/config.json`; the shell's `$DOCKER_HOST`/`$DOCKER_CONTEXT` and `-H`/`--context` in the buffer are not followed.
+- The daemon does not see the shell's environment (other than PATH). `$AWS_DATA_PATH`, `$KUBECONFIG`, `$CARGO_HOME`, `$RUSTUP_HOME`, `$OLLAMA_MODELS`, `$UV_TOOL_DIR`, `$HOMEBREW_CACHE`, `$AWS_CONFIG_FILE` and `$AWS_SHARED_CREDENTIALS_FILE` are not followed, nor are `--kubeconfig`, `--manifest-path`, `--project`, `--prefix`, `--extensions-dir`, `--user-data-dir` or `cdk --output` in the buffer. tmux `-L`/`-S` sockets are not followed. Docker uses the daemon's own environment and the current context in `~/.docker/config.json`; the shell's `$DOCKER_HOST`/`$DOCKER_CONTEXT` and `-H`/`--context` in the buffer are not followed.
 - "Paths" below means file system paths are offered next to the values. Git tokens do so for positionals only, not flag values.
 
 | Token(s) | Lists | Read from | Paths | Not followed |

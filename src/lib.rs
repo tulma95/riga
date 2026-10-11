@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod aws;
+pub mod aws_cli;
 pub mod background;
 pub mod brew;
 pub mod cargo_toml;

@@ -56,6 +56,8 @@ pub struct Arg {
 pub struct Command {
     pub names: Vec<String>,
     pub nobundle: bool,
+    /// Words that are not subcommands do not end completion; see `docs/SPECS.md`.
+    pub open: bool,
     pub description: String,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
@@ -159,6 +161,244 @@ struct Ref {
     excludes: bool,
     name: String,
 }
+/// A flag as the `.riga` parser or a generator describes it. `requires` and `excludes` name other
+/// flags visible in the same command and are resolved in `finish`.
+#[derive(Clone, Debug, Default)]
+pub struct FlagDef {
+    pub names: Vec<String>,
+    pub value: Option<ValueSpec>,
+    pub repeat: bool,
+    pub persistent: bool,
+    pub chdir: bool,
+    pub requires: Vec<String>,
+    pub excludes: Vec<String>,
+    pub description: String,
+}
+/// Assembles a `Spec` for the `.riga` parser and for generated specs alike, so both obey the same
+/// limits: name charset and length, description length and characters, duplicate spellings,
+/// choices, and `requires`/`excludes` resolution.
+#[derive(Default)]
+pub struct Builder {
+    spec: Spec,
+    label: String,
+    refs: Vec<Ref>,
+    errors: Vec<(usize, String)>,
+    total: usize,
+}
+impl Builder {
+    /// `label` prefixes the errors `finish` returns.
+    pub fn new(label: &str) -> Self {
+        Builder {
+            label: label.into(),
+            ..Builder::default()
+        }
+    }
+    /// Continue from a finished spec; its references are already resolved.
+    pub fn from_spec(spec: Spec, label: &str) -> Self {
+        Builder {
+            spec,
+            ..Builder::new(label)
+        }
+    }
+    pub fn spec(&self) -> &Spec {
+        &self.spec
+    }
+    pub fn set_open(&mut self, command: usize, open: bool) {
+        self.spec.commands[command].open = open;
+    }
+    /// Keep only the earliest errors, but count them all.
+    fn report(&mut self, line: usize, message: String) {
+        self.total += 1;
+        if self.errors.len() < 2 * MAX_ERRORS {
+            self.errors.push((line, message));
+        }
+    }
+    /// `parent` is `None` only for the one root command.
+    pub fn command(
+        &mut self,
+        parent: Option<usize>,
+        names: Vec<String>,
+        nobundle: bool,
+        open: bool,
+        description: String,
+    ) -> Result<usize, String> {
+        check_description(&description)?;
+        check_names(&names, false)?;
+        let spec = &mut self.spec;
+        let index = spec.commands.len();
+        match parent {
+            None if index > 0 => return Err("the top level must be exactly one `command`".into()),
+            Some(p) => {
+                let own = &mut spec.commands[p].child_names;
+                if let Some(n) = names.iter().find(|n| own.contains_key(*n)) {
+                    return Err(format!("duplicate command `{n}`"));
+                }
+                own.extend(names.iter().map(|n| (n.clone(), index)));
+                spec.commands[p].children.push(index);
+            }
+            None => {}
+        }
+        spec.commands.push(Command {
+            names,
+            nobundle,
+            open,
+            description,
+            parent,
+            ..Command::default()
+        });
+        Ok(index)
+    }
+    /// `line` is only used to place reference errors.
+    pub fn flag(&mut self, parent: usize, line: usize, def: FlagDef) -> Result<usize, String> {
+        check_description(&def.description)?;
+        check_names(&def.names, true)?;
+        if let Some(ValueSpec {
+            value: Value::Choices(choices),
+            ..
+        }) = &def.value
+            && !valid_choices(choices)
+        {
+            return Err(format!(
+                "choices must be non-empty words in `{{{}}}`",
+                choices.join(",")
+            ));
+        }
+        let mut targets = HashSet::new();
+        for (kind, list) in [("requires", &def.requires), ("excludes", &def.excludes)] {
+            for name in list {
+                if !name.starts_with('-') {
+                    return Err(format!("`{kind}` needs flag names, got `{name}`"));
+                }
+                once(&mut targets, name, "reference")?;
+            }
+        }
+        if def.chdir
+            && def
+                .value
+                .as_ref()
+                .is_none_or(|v| v.value != Value::Directory)
+        {
+            return Err("`chdir` requires a <directory> value".into());
+        }
+        let spec = &mut self.spec;
+        let own = &mut spec.commands[parent].flag_names;
+        if let Some(n) = def.names.iter().find(|n| own.contains_key(*n)) {
+            return Err(format!("duplicate flag `{n}`"));
+        }
+        let index = spec.flags.len();
+        own.extend(def.names.iter().map(|n| (n.clone(), index)));
+        spec.commands[parent].flags.push(index);
+        for (excludes, list) in [(false, &def.requires), (true, &def.excludes)] {
+            for name in list {
+                self.refs.push(Ref {
+                    line,
+                    flag: index,
+                    excludes,
+                    name: name.clone(),
+                });
+            }
+        }
+        spec.flags.push(Flag {
+            names: def.names,
+            value: def.value,
+            repeat: def.repeat,
+            persistent: def.persistent,
+            chdir: def.chdir,
+            requires: vec![],
+            excludes: vec![],
+            description: def.description,
+            command: parent,
+        });
+        Ok(index)
+    }
+    pub fn arg(&mut self, parent: usize, arg: Arg) -> Result<(), String> {
+        check_description(&arg.description)?;
+        let args = &mut self.spec.commands[parent].args;
+        if args.last().is_some_and(|a| a.repeat) {
+            return Err("a `repeat` arg must be the last arg".into());
+        }
+        args.push(arg);
+        Ok(())
+    }
+    /// Resolve references and return the spec, or the errors as `label:line: message`, sorted by
+    /// line, at most `MAX_ERRORS`.
+    pub fn finish(mut self) -> Result<Spec, Vec<String>> {
+        // A failed root line already explains a missing root.
+        if self.spec.commands.is_empty() && self.errors.is_empty() {
+            self.report(1, "missing top-level `command`".into());
+        }
+        for r in std::mem::take(&mut self.refs) {
+            // Refs are only recorded for flags that were added, but never index untrusted positions blindly.
+            let Some(flag) = self.spec.flags.get(r.flag) else {
+                continue;
+            };
+            let found = self.spec.flag(flag.command, &r.name);
+            let spec = &mut self.spec;
+            match found {
+                Some(target) if target == r.flag => {
+                    self.report(r.line, "flag cannot reference itself".into())
+                }
+                Some(target) if r.excludes => {
+                    spec.flags[r.flag].excludes.push(target);
+                    spec.flags[target].excludes.push(r.flag);
+                }
+                Some(target) => spec.flags[r.flag].requires.push(target),
+                None => self.report(r.line, format!("`{}` is not a flag visible here", r.name)),
+            }
+        }
+        for flag in &mut self.spec.flags {
+            flag.excludes.sort_unstable();
+            flag.excludes.dedup();
+        }
+        if self.errors.is_empty() {
+            return Ok(self.spec);
+        }
+        let label = &self.label;
+        let mut errors = self.errors;
+        errors.sort_by_key(|(line, _)| *line);
+        let extra = self.total - errors.len().min(MAX_ERRORS);
+        let mut out: Vec<String> = errors
+            .into_iter()
+            .take(MAX_ERRORS)
+            .map(|(line, m)| printable(&format!("{label}:{line}: {m}")))
+            .collect();
+        if extra > 0 {
+            out.push(printable(&format!(
+                "{label}: {extra} more errors not shown"
+            )));
+        }
+        Err(out)
+    }
+}
+fn check_description(description: &str) -> Result<(), String> {
+    if description.chars().count() > MAX_DESCRIPTION {
+        return Err(format!(
+            "descriptions are limited to {MAX_DESCRIPTION} characters"
+        ));
+    }
+    if description.chars().any(deceptive) {
+        return Err("descriptions must not contain control or bidirectional characters".into());
+    }
+    Ok(())
+}
+/// Plain text for a generated description: no control or bidirectional characters, whitespace
+/// collapsed, cut to `max` characters (at most `MAX_DESCRIPTION`) with an ellipsis.
+pub fn clamp_description(text: &str, max: usize) -> String {
+    let clean: String = text.chars().filter(|&c| !deceptive(c)).collect();
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max = max.min(MAX_DESCRIPTION);
+    if clean.chars().count() <= max {
+        return clean;
+    }
+    let cut: String = clean.chars().take(max - 1).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{}…", cut.trim_end_matches([',', ';', ':', '.']))
+}
+fn valid_choices(choices: &[String]) -> bool {
+    !choices
+        .iter()
+        .any(|c| c.is_empty() || c.contains(['{', '}', '[', ']']) || c.chars().any(deceptive))
+}
 #[derive(Clone, Copy, PartialEq)]
 enum Slot {
     Command(usize),
@@ -168,74 +408,22 @@ enum Slot {
 }
 #[derive(Default)]
 struct Parser {
-    spec: Spec,
+    b: Builder,
     /// Statement at each depth; only commands may have children.
     stack: Vec<Slot>,
-    refs: Vec<Ref>,
 }
 pub fn parse(label: &str, text: &str) -> Result<Spec, Vec<String>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut p = Parser::default();
-    let mut errors: Vec<(usize, String)> = vec![];
-    let mut total = 0;
-    // Keep only enough errors to show the earliest ones; count the rest.
-    let mut report = |errors: &mut Vec<(usize, String)>, line: usize, m: String| {
-        total += 1;
-        if errors.len() < 2 * MAX_ERRORS {
-            errors.push((line, m));
-        }
+    let mut p = Parser {
+        b: Builder::new(label),
+        stack: vec![],
     };
     for (n, raw) in text.lines().enumerate() {
         if let Err(m) = p.line(n + 1, raw) {
-            report(&mut errors, n + 1, m);
+            p.b.report(n + 1, m);
         }
     }
-    let mut spec = p.spec;
-    // A failed root line already explains a missing root.
-    if spec.commands.is_empty() && errors.is_empty() {
-        report(&mut errors, 1, "missing top-level `command`".into());
-    }
-    for r in p.refs {
-        // Refs are only recorded for flags that were added, but never index untrusted positions blindly.
-        let Some(flag) = spec.flags.get(r.flag) else {
-            continue;
-        };
-        match spec.flag(flag.command, &r.name) {
-            Some(target) if target == r.flag => {
-                report(&mut errors, r.line, "flag cannot reference itself".into())
-            }
-            Some(target) if r.excludes => {
-                spec.flags[r.flag].excludes.push(target);
-                spec.flags[target].excludes.push(r.flag);
-            }
-            Some(target) => spec.flags[r.flag].requires.push(target),
-            None => report(
-                &mut errors,
-                r.line,
-                format!("`{}` is not a flag visible here", r.name),
-            ),
-        }
-    }
-    for flag in &mut spec.flags {
-        flag.excludes.sort_unstable();
-        flag.excludes.dedup();
-    }
-    if errors.is_empty() {
-        return Ok(spec);
-    }
-    errors.sort_by_key(|(line, _)| *line);
-    let extra = total - errors.len().min(MAX_ERRORS);
-    let mut out: Vec<String> = errors
-        .into_iter()
-        .take(MAX_ERRORS)
-        .map(|(line, m)| printable(&format!("{label}:{line}: {m}")))
-        .collect();
-    if extra > 0 {
-        out.push(printable(&format!(
-            "{label}: {extra} more errors not shown"
-        )));
-    }
-    Err(out)
+    p.b.finish()
 }
 fn once(seen: &mut HashSet<String>, item: &str, what: &str) -> Result<(), String> {
     if seen.insert(item.into()) {
@@ -246,7 +434,7 @@ fn once(seen: &mut HashSet<String>, item: &str, what: &str) -> Result<(), String
 }
 impl Parser {
     fn line(&mut self, number: usize, raw: &str) -> Result<(), String> {
-        let spec = &mut self.spec;
+        let spec = &mut self.b.spec;
         let body = raw.trim_start_matches(' ');
         if body.starts_with('\t') {
             return Err("tabs are not allowed in indentation".into());
@@ -285,14 +473,7 @@ impl Parser {
             _ => return Err("only commands may have children".into()),
         };
         let description = description.unwrap_or_default();
-        if description.chars().count() > MAX_DESCRIPTION {
-            return Err(format!(
-                "descriptions are limited to {MAX_DESCRIPTION} characters"
-            ));
-        }
-        if description.chars().any(deceptive) {
-            return Err("descriptions must not contain control or bidirectional characters".into());
-        }
+        check_description(&description)?;
         let result = self.statement(number, keyword, rest, description, parent);
         if result.is_err() && keyword == "command" {
             self.stack.push(Slot::Skip);
@@ -307,35 +488,21 @@ impl Parser {
         description: String,
         parent: Option<usize>,
     ) -> Result<(), String> {
-        let spec = &mut self.spec;
         let mut rest = rest.iter().map(String::as_str);
         let mut attrs = HashSet::new();
         match keyword {
             "command" => {
                 let names = names(rest.next(), false)?;
-                let mut command = Command {
-                    names,
-                    description,
-                    parent,
-                    ..Command::default()
-                };
+                let (mut nobundle, mut open) = (false, false);
                 for attr in rest {
                     match attr {
-                        "nobundle" => command.nobundle = true,
+                        "nobundle" => nobundle = true,
+                        "open" => open = true,
                         _ => return Err(format!("unknown command attribute `{attr}`")),
                     }
                     once(&mut attrs, attr, "attribute")?;
                 }
-                let index = spec.commands.len();
-                if let Some(p) = parent {
-                    let own = &mut spec.commands[p].child_names;
-                    if let Some(n) = command.names.iter().find(|n| own.contains_key(*n)) {
-                        return Err(format!("duplicate command `{n}`"));
-                    }
-                    own.extend(command.names.iter().map(|n| (n.clone(), index)));
-                    spec.commands[p].children.push(index);
-                }
-                spec.commands.push(command);
+                let index = self.b.command(parent, names, nobundle, open, description)?;
                 self.stack.push(Slot::Command(index));
             }
             "flag" => {
@@ -346,60 +513,38 @@ impl Parser {
                     Some(t) => Some(value(t)?),
                     None => None,
                 };
-                let index = spec.flags.len();
-                let mut flag = Flag {
+                let mut def = FlagDef {
                     names,
                     value,
-                    repeat: false,
-                    persistent: false,
-                    chdir: false,
-                    requires: vec![],
-                    excludes: vec![],
                     description,
-                    command: p,
+                    ..FlagDef::default()
                 };
-                let mut flag_refs = vec![];
                 let mut targets = HashSet::new();
                 for attr in rest {
                     let (key, list) = attr.split_once('=').unwrap_or((attr, ""));
                     once(&mut attrs, key, "attribute")?;
                     match (key, attr.contains('=')) {
-                        ("repeat", false) => flag.repeat = true,
-                        ("persistent", false) => flag.persistent = true,
-                        ("chdir", false) => flag.chdir = true,
+                        ("repeat", false) => def.repeat = true,
+                        ("persistent", false) => def.persistent = true,
+                        ("chdir", false) => def.chdir = true,
                         (kind @ ("requires" | "excludes"), true) => {
                             for name in list.split(',') {
                                 if !name.starts_with('-') {
                                     return Err(format!("`{kind}` needs flag names, got `{name}`"));
                                 }
                                 once(&mut targets, name, "reference")?;
-                                flag_refs.push(Ref {
-                                    line: number,
-                                    flag: index,
-                                    excludes: kind == "excludes",
-                                    name: name.into(),
-                                });
+                                let list = if kind == "requires" {
+                                    &mut def.requires
+                                } else {
+                                    &mut def.excludes
+                                };
+                                list.push(name.into());
                             }
                         }
                         _ => return Err(format!("unknown flag attribute `{attr}`")),
                     }
                 }
-                if flag.chdir
-                    && flag
-                        .value
-                        .as_ref()
-                        .is_none_or(|v| v.value != Value::Directory)
-                {
-                    return Err("`chdir` requires a <directory> value".into());
-                }
-                let own = &mut spec.commands[p].flag_names;
-                if let Some(n) = flag.names.iter().find(|n| own.contains_key(*n)) {
-                    return Err(format!("duplicate flag `{n}`"));
-                }
-                own.extend(flag.names.iter().map(|n| (n.clone(), index)));
-                spec.commands[p].flags.push(index);
-                spec.flags.push(flag);
-                self.refs.extend(flag_refs);
+                self.b.flag(p, number, def)?;
                 self.stack.push(Slot::Leaf);
             }
             "arg" => {
@@ -418,11 +563,7 @@ impl Parser {
                     }
                     once(&mut attrs, attr, "attribute")?;
                 }
-                let args = &mut spec.commands[p].args;
-                if args.last().is_some_and(|a| a.repeat) {
-                    return Err("a `repeat` arg must be the last arg".into());
-                }
-                args.push(arg);
+                self.b.arg(p, arg)?;
                 self.stack.push(Slot::Leaf);
             }
             _ => return Err(format!("unknown keyword `{keyword}`")),
@@ -431,16 +572,25 @@ impl Parser {
     }
 }
 fn names(token: Option<&str>, flag: bool) -> Result<Vec<String>, String> {
-    let token = token.ok_or("missing name")?;
+    let names: Vec<String> = token
+        .ok_or("missing name")?
+        .split('|')
+        .map(Into::into)
+        .collect();
+    check_names(&names, flag)?;
+    Ok(names)
+}
+fn check_names(names: &[String], flag: bool) -> Result<(), String> {
     let mut seen = HashSet::new();
-    let mut names = vec![];
-    for n in token.split('|') {
+    for n in names {
         if n.chars().count() > MAX_NAME {
             return Err(format!("names are limited to {MAX_NAME} characters"));
         }
+        // `#` only after the first character, where it can't start a comment (curl's `-#`).
         let valid = !n.is_empty()
+            && !n.starts_with('#')
             && n.chars()
-                .all(|c| c.is_alphanumeric() || "-_.:+@%/".contains(c));
+                .all(|c| c.is_alphanumeric() || "-_.:+@%/#".contains(c));
         if !valid {
             return Err(format!("invalid name `{n}`"));
         } else if flag && (!n.starts_with('-') || n == "-" || n == "--") {
@@ -452,9 +602,8 @@ fn names(token: Option<&str>, flag: bool) -> Result<Vec<String>, String> {
         if seen.len() > MAX_NAMES {
             return Err(format!("more than {MAX_NAMES} names"));
         }
-        names.push(n.to_owned());
     }
-    Ok(names)
+    Ok(())
 }
 /// Not recursive: at most one `[...]` wrapper, checked before the inner value is parsed.
 fn value(token: &str) -> Result<ValueSpec, String> {
@@ -472,14 +621,18 @@ fn value(token: &str) -> Result<ValueSpec, String> {
         match label {
             "file" => Value::File,
             "directory" => Value::Directory,
-            _ => Source::parse(label).map_or_else(|| Value::Text(label.into()), Value::Source),
+            _ => match Source::parse(label) {
+                Some(source) => Value::Source(source),
+                // A misspelt source would otherwise silently complete nothing.
+                None if Source::family(label) => {
+                    return Err(format!("unknown value source `{token}`"));
+                }
+                None => Value::Text(label.into()),
+            },
         }
     } else if let Some(list) = token.strip_prefix('{').and_then(|t| t.strip_suffix('}')) {
         let choices: Vec<String> = list.split(',').map(str::to_owned).collect();
-        if choices
-            .iter()
-            .any(|c| c.is_empty() || c.contains(['{', '}', '[', ']']) || c.chars().any(deceptive))
-        {
+        if !valid_choices(&choices) {
             return Err(format!("choices must be non-empty words in `{token}`"));
         }
         Value::Choices(choices)

@@ -1,6 +1,6 @@
 //! Completion providers have no terminal or UI dependencies. Ranges count Unicode scalars, as ZLE does.
 use crate::{
-    ai, background,
+    ai, aws_cli, background,
     protocol::State,
     sources::Env,
     spec::{self, Arg, Spec, Value, ValueSpec},
@@ -10,9 +10,10 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
-const MAX_RESULTS: usize = 64;
+const MAX_RESULTS: usize = 128;
 /// Kind of an informational row (AI progress); accepting it never edits the buffer.
 pub const STATUS: &str = "status";
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,6 +254,8 @@ struct SpecContext<'a> {
     cwd: Option<PathBuf>,
     /// A word the spec doesn't know (flag or subcommand) disabled it.
     unknown: bool,
+    /// The next word belongs to an unknown option of an `open` command.
+    skip_value: bool,
 }
 impl<'a> SpecContext<'a> {
     fn new(spec: Option<&'a Spec>, previous: &[String], cwd: &Path) -> Self {
@@ -267,6 +270,7 @@ impl<'a> SpecContext<'a> {
             positionals: 0,
             cwd: Some(cwd.into()),
             unknown: false,
+            skip_value: false,
         };
         let Some(spec) = spec else {
             return result;
@@ -275,6 +279,12 @@ impl<'a> SpecContext<'a> {
             if !result.enabled {
                 break;
             }
+            if std::mem::take(&mut result.skip_value) && !(word.starts_with('-') && word != "-") {
+                continue;
+            }
+            // In an `open` command words the spec lacks (services of an uninstalled CLI) are
+            // skipped, not fatal: only its persistent flags stay meaningful.
+            let open = spec.commands[result.command].open;
             if let Some(flag) = result.pending.take() {
                 if spec.flags[flag].chdir {
                     result.change_directory(word);
@@ -293,6 +303,9 @@ impl<'a> SpecContext<'a> {
                     }
                     result.used.extend(flags);
                     result.pending = pending;
+                } else if open {
+                    // Its arity is unknown: take a following plain word as its value.
+                    result.skip_value = !word.contains('=');
                 } else {
                     // An unknown option might consume the next word: do not guess its arity.
                     result.enabled = false;
@@ -304,6 +317,9 @@ impl<'a> SpecContext<'a> {
                 if let Some(&child) = command.child_names.get(word).filter(|_| descend) {
                     result.command = child;
                     result.visible = spec.visible_flags(child);
+                } else if open {
+                    result.positionals += 1;
+                    result.visible.retain(|&f| spec.flags[f].persistent);
                 } else if !command.children.is_empty() && command.args.is_empty() {
                     result.enabled = false;
                     result.unknown = true;
@@ -425,6 +441,8 @@ struct Candidate<'a> {
     names: &'a [String],
     /// Attached option spelling (`--format=`) prefixed to an inserted value.
     option: &'a str,
+    /// A persistent flag of an ancestor command, ranked after the current command's own entries.
+    inherited: bool,
 }
 /// Order within the popup after exact matches: values a command expects, then its commands and flags.
 fn tier(kind: &str) -> u8 {
@@ -442,6 +460,13 @@ fn described(description: &str, names: &[String]) -> String {
         description.into()
     }
 }
+/// Which `aws` spec applies, see `Engine::aws_spec`.
+enum AwsSpec {
+    Curated,
+    /// The CLI's data is being read; completion uses this spec meanwhile (the curated one if none).
+    Pending(Option<Arc<Spec>>),
+    Ready(Arc<Spec>),
+}
 pub struct Engine {
     executables: Vec<String>,
     scanned: Instant,
@@ -452,6 +477,8 @@ pub struct Engine {
     /// Bundled specs apply only to commands found on the shell's PATH.
     installed_only: bool,
     runs: background::Runs,
+    /// Services and operations read from the installed AWS CLI's data.
+    aws: aws_cli::Cli,
     /// Natural language to command; on unless the daemon's environment has `RIGA_AI=0`.
     ai: Option<ai::Ai>,
 }
@@ -468,6 +495,7 @@ impl Default for Engine {
 }
 impl Engine {
     pub fn new(path: String, home: PathBuf) -> Self {
+        let aws = aws_cli::Cli::default();
         Self {
             executables: vec![],
             scanned: Instant::now() - Duration::from_secs(60),
@@ -476,7 +504,8 @@ impl Engine {
             specs: bundled_specs(),
             filesystem: true,
             installed_only: false,
-            runs: background::Runs::default(),
+            runs: background::Runs::with_custom(aws.exec()),
+            aws,
             ai: None,
         }
     }
@@ -516,6 +545,36 @@ impl Engine {
             .iter()
             .filter(|_| installed)
             .find(|s| s.commands[0].names.iter().any(|n| n == word))
+    }
+    /// `aws` with the services (and, once the words name one, the operations) of the installed
+    /// CLI. While that data is still being read in the background the answer is `Pending`; the
+    /// curated spec, whose root is `open`, is `Curated` and serves without CLI data.
+    fn aws_spec(&self, previous: &[String], cwd: &Path) -> AwsSpec {
+        if !self.filesystem || previous.first().map(String::as_str) != Some("aws") {
+            return AwsSpec::Curated;
+        }
+        let Some(curated) = self.spec("aws") else {
+            return AwsSpec::Curated;
+        };
+        let root = match self.aws.root(&self.runs, &self.path, curated) {
+            aws_cli::Lookup::Absent => return AwsSpec::Curated,
+            aws_cli::Lookup::Pending => return AwsSpec::Pending(None),
+            aws_cli::Lookup::Ready(root) => root,
+        };
+        let mut command = SpecContext::new(Some(&root), previous, cwd).command;
+        // The service is the ancestor just below the root.
+        while let Some(parent) = root.commands[command].parent.filter(|&p| p != 0) {
+            command = parent;
+        }
+        if root.commands[command].parent.is_none() {
+            return AwsSpec::Ready(root);
+        }
+        let name = &root.commands[command].names[0];
+        match self.aws.service(&self.runs, &self.path, curated, name) {
+            aws_cli::Lookup::Ready(merged) => AwsSpec::Ready(merged),
+            aws_cli::Lookup::Pending => AwsSpec::Pending(Some(root)),
+            aws_cli::Lookup::Absent => AwsSpec::Ready(root),
+        }
     }
     /// Names of bundled specs active for the current PATH.
     pub fn spec_status(&mut self) -> Vec<String> {
@@ -610,7 +669,13 @@ impl Engine {
         if !command {
             self.scan_path();
         }
-        let spec = c.previous.first().and_then(|word| self.spec(word));
+        let aws = match self.aws_spec(&c.previous, &state.cwd) {
+            AwsSpec::Ready(spec) | AwsSpec::Pending(Some(spec)) => Some(spec),
+            _ => None,
+        };
+        let spec = aws
+            .as_deref()
+            .or_else(|| c.previous.first().and_then(|word| self.spec(word)));
         let ctx = SpecContext::new(spec, &c.previous, &state.cwd);
         let attached = if ctx.enabled && ctx.options && ctx.pending.is_none() {
             ctx.attached_value(&c.prefix)
@@ -647,6 +712,7 @@ impl Engine {
                     description: &r.description,
                     names: &[],
                     option,
+                    inherited: false,
                 });
             }
             if let Some(Value::Choices(choices)) = value {
@@ -661,6 +727,7 @@ impl Engine {
                         description,
                         names: &[],
                         option,
+                        inherited: false,
                     });
                 }
             }
@@ -675,6 +742,7 @@ impl Engine {
                                 description: &child.description,
                                 names: &child.names,
                                 option: "",
+                                inherited: false,
                             });
                         }
                     }
@@ -693,14 +761,27 @@ impl Engine {
                                 description: &entry.description,
                                 names: &entry.names,
                                 option: "",
+                                inherited: entry.command != ctx.command,
                             });
                         }
                     }
                 }
             }
         }
-        candidates
-            .sort_by_cached_key(|x| (x.label != c.prefix, tier(x.kind), x.label.to_lowercase()));
+        // Inherited flags (an ancestor's persistent ones, like all of aws's global options) come last,
+        // so the cut below drops them before the command's own flags.
+        candidates.sort_by_cached_key(|x| {
+            (
+                x.label != c.prefix,
+                tier(x.kind) + 10 * u8::from(x.inherited),
+                x.label.to_lowercase(),
+            )
+        });
+        let inherited: HashSet<&str> = candidates
+            .iter()
+            .filter(|x| x.inherited)
+            .map(|x| x.label)
+            .collect();
         // Slack for later deduplication against filesystem entries with the same insertion.
         for x in candidates.iter().take(2 * MAX_RESULTS) {
             let insert = if matches!(x.kind, "value" | "ref") {
@@ -743,8 +824,9 @@ impl Engine {
             }
         }
         out.sort_by_cached_key(|x| {
+            let rank = tier(x.kind) + 10 * u8::from(inherited.contains(x.insert.as_str()));
             (
-                if x.label == c.prefix { 0 } else { tier(x.kind) },
+                if x.label == c.prefix { 0 } else { rank },
                 x.label.to_lowercase(),
             )
         });
@@ -818,11 +900,17 @@ impl Engine {
             && !ai::denied(&segments, line)
             && segments.iter().all(|words| {
                 let first = &words[0];
-                !first.contains('=')
-                    && self.executables.binary_search(first).is_ok()
-                    && self
-                        .spec(first)
+                !first.contains('=') && self.executables.binary_search(first).is_ok() && {
+                    let aws = match self.aws_spec(words, cwd) {
+                        // Unverifiable until the CLI's data is read; a retry then decides.
+                        AwsSpec::Pending(_) => return false,
+                        AwsSpec::Ready(spec) => Some(spec),
+                        AwsSpec::Curated => None,
+                    };
+                    aws.as_deref()
+                        .or_else(|| self.spec(first))
                         .is_none_or(|spec| !SpecContext::new(Some(spec), words, cwd).unknown)
+                }
             })
     }
     fn files(&self, c: &Context, cwd: &Path, only_dirs: bool, out: &mut Vec<Suggestion>) {
@@ -1081,7 +1169,6 @@ command t "Test tool"
                 "--b",
                 "--color",
                 "--mode",
-                "--verbose",
                 "--x",
                 "--y",
                 "-a",
@@ -1089,7 +1176,9 @@ command t "Test tool"
                 "-m",
                 "-v",
                 "dir/",
-                "file"
+                "file",
+                // Inherited (persistent) flags rank after everything else.
+                "--verbose"
             ]
         );
         assert_eq!(
@@ -1382,7 +1471,7 @@ command t "Test tool"
                 "command t\n  arg <a> stop stop",
                 "x.riga:2: duplicate attribute `stop`",
             ),
-            ("command t\n  flag --a#b", "x.riga:2: invalid name `--a#b`"),
+            ("command t\n  flag --a!b", "x.riga:2: invalid name `--a!b`"),
             (
                 "command t \"\u{202e}gnirts\"",
                 "x.riga:1: descriptions must not contain control",
@@ -1527,7 +1616,7 @@ command t "Test tool"
         )
         .unwrap();
         assert_eq!((spec.flags.len(), spec.flags[0].names.len()), (3001, 64));
-        // Completion ranks borrowed candidates and builds at most 64 suggestions.
+        // Completion ranks borrowed candidates and builds at most 128 suggestions.
         let desc = "d".repeat(200);
         let many: String = (0..500)
             .map(|f| {
@@ -1546,9 +1635,9 @@ command t "Test tool"
         engine.specs = vec![spec::parse("wide.riga", &text).unwrap()];
         let nowhere = Path::new("/nonexistent");
         let flags = labels(&mut engine, "t -", nowhere);
-        assert_eq!((flags.len(), flags[0].as_str()), (64, "--f0n0"));
+        assert_eq!((flags.len(), flags[0].as_str()), (MAX_RESULTS, "--f0n0"));
         let values = labels(&mut engine, "t s c1", nowhere);
-        assert_eq!((values.len(), values[0].as_str()), (64, "c1"));
+        assert_eq!((values.len(), values[0].as_str()), (MAX_RESULTS, "c1"));
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "{:?}",
@@ -1625,6 +1714,248 @@ command t "Test tool"
     }
     fn error_of(text: &str) -> String {
         spec::parse("x.riga", text).unwrap_err().join("\n")
+    }
+    const OPEN_SPEC: &str = r#"
+command o open "Open tool"
+  flag --verbose|-v persistent "Verbose"
+  flag --root "Root only"
+  command known "Known"
+    flag --k "K"
+"#;
+    #[test]
+    fn open_commands_keep_completing_after_unknown_words() {
+        let nowhere = Path::new("/nonexistent-riga-test-directory");
+        let spec = spec::parse("o.riga", OPEN_SPEC).unwrap();
+        let mut engine = Engine::new(String::new(), nowhere.into());
+        engine.specs = vec![spec.clone()];
+        // Long flags and subcommands only.
+        let mut at = |buffer: &str| {
+            let mut got = labels(&mut engine, buffer, nowhere);
+            got.retain(|l| !l.starts_with('-') || l.starts_with("--"));
+            got
+        };
+        assert_eq!(at("o "), ["--root", "--verbose", "known"]);
+        // An unknown word: only persistent flags stay, and the subcommands are gone.
+        assert_eq!(at("o zzz "), ["--verbose"]);
+        assert_eq!(at("o zzz yyy --v"), ["--verbose"]);
+        assert_eq!(at("o zzz --verbose "), Vec::<String>::new());
+        assert_eq!(at("o known "), ["--k", "--verbose"]);
+        // An unknown option stays enabled and takes a following plain word as its value.
+        assert_eq!(at("o --x "), ["--root", "--verbose", "known"]);
+        assert_eq!(at("o --x --"), ["--root", "--verbose"]);
+        assert_eq!(at("o --x=1 "), ["--root", "--verbose", "known"]);
+        assert_eq!(at("o --x v known "), ["--k", "--verbose"]);
+        // A scope that is not open still stops at unknown words and options.
+        assert!(at("o known --nope --").is_empty());
+        for words in [
+            &["o", "zzz", "--bad", "v", "yyy"][..],
+            &["o", "--bad", "known", "--k"],
+        ] {
+            let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+            let ctx = SpecContext::new(Some(&spec), &words, nowhere);
+            assert!(!ctx.unknown && ctx.enabled, "{words:?}");
+        }
+        assert!(error_of("command t open open").contains("duplicate attribute `open`"));
+        assert!(
+            error_of("command t\n  command u\n  flag --a open").contains("unknown flag attribute")
+        );
+    }
+    fn aws_state(buffer: &str, path: &str) -> State {
+        State {
+            session: "s".into(),
+            pane: "p".into(),
+            revision: 1,
+            cursor: buffer.chars().count(),
+            cwd: "/nonexistent-riga-test-directory".into(),
+            buffer: buffer.into(),
+            path: path.into(),
+        }
+    }
+    /// Complete `buffer`, letting background reads of the CLI data finish in between.
+    fn aws_labels(engine: &mut Engine, buffer: &str, path: &str) -> Vec<String> {
+        let mut got = vec![];
+        for _ in 0..3 {
+            got = engine
+                .complete(&aws_state(buffer, path))
+                .into_iter()
+                .map(|s| s.label)
+                .collect();
+            let start = Instant::now();
+            while engine.background_busy() {
+                assert!(
+                    start.elapsed() < Duration::from_secs(30),
+                    "read never finished"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        got
+    }
+    #[test]
+    fn aws_services_and_operations_come_from_the_installed_cli() {
+        let (root, path) = aws_cli::fake_install("engine");
+        let mut engine = Engine::new(path.clone(), root.clone());
+        let mut at = |buffer: &str| aws_labels(&mut engine, buffer, &path);
+        // Generated services next to the curated top-level commands.
+        assert_eq!(at("aws r"), ["rds"]);
+        assert!(at("aws ").contains(&"rds".to_string()) && at("aws ").contains(&"s3".to_string()));
+        // Curated wins per operation, the rest is generated.
+        let ec2 = at("aws ec2 describe-");
+        assert!(
+            ec2.contains(&"describe-hosts".to_string())
+                && ec2.contains(&"describe-instances".to_string())
+        );
+        assert!(!at("aws ec2 old").contains(&"old-operation".to_string()));
+        let rds = at("aws rds ");
+        assert_eq!(
+            rds.iter()
+                .filter(|l| !l.starts_with('-'))
+                .collect::<Vec<_>>(),
+            ["describe-db-instances", "list-acls"]
+        );
+        assert!(at("aws s3api ").contains(&"get-bucket-foo".to_string()));
+        // A curated operation keeps its flags and gains the generated ones; its own win.
+        let curated = at("aws ec2 run-instances --");
+        for flag in ["--count", "--min-count", "--cli-input-json"] {
+            assert_eq!(
+                curated.contains(&flag.to_string()),
+                flag != "--min-count",
+                "{flag}"
+            );
+        }
+        // Flags before the service name do not hide it.
+        let hosts = at("aws --profile dev ec2 describe-hosts --");
+        for flag in [
+            "--host-ids",
+            "--dry-run",
+            "--no-dry-run",
+            "--max-results",
+            "--cli-input-json",
+            "--starting-token",
+            "--page-size",
+            "--region",
+        ] {
+            assert!(hosts.contains(&flag.to_string()), "{flag} in {hosts:?}");
+        }
+        assert!(
+            !hosts.contains(&"--query".to_string())
+                || hosts.iter().filter(|l| *l == "--query").count() == 1
+        );
+        assert!(
+            at("aws ec2 describe-hosts --dry-run --")
+                .iter()
+                .all(|l| l != "--no-dry-run" && l != "--dry-run")
+        );
+        assert_eq!(at("aws ec2 describe-hosts --host-recovery "), ["off", "on"]);
+        // Services the CLI lacks are rejected rather than skipped.
+        assert!(at("aws banana ").is_empty());
+        assert!(at("aws rds nope --").is_empty());
+        engine.scan_path();
+        let cwd = Path::new("/nonexistent-riga-test-directory");
+        for (line, valid) in [
+            (
+                "aws rds describe-db-instances --db-instance-identifier x",
+                true,
+            ),
+            ("aws ec2 describe-hosts --dry-run", true),
+            ("aws rds describe-everything", false),
+            ("aws banana describe", false),
+        ] {
+            assert_eq!(engine.valid_command(line, cwd), valid, "{line}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn aws_commands_are_not_validated_before_the_cli_data_is_read() {
+        let (root, path) = aws_cli::fake_install("cold");
+        let mut engine = Engine::new(path.clone(), root.clone());
+        engine.scan_path();
+        let cwd = Path::new("/nonexistent-riga-test-directory");
+        let lines = [
+            ("aws rds describe-db-instances", true),
+            ("aws rds describe-dbinstances", false),
+            ("aws rds nope", false),
+            ("aws bogusservice x", false),
+        ];
+        // Nothing is built yet: the open curated spec must not wave anything through.
+        for (line, _) in lines {
+            assert!(!engine.valid_command(line, cwd), "cold: {line}");
+        }
+        aws_labels(&mut engine, "aws rds ", &path);
+        for (line, valid) in lines {
+            assert_eq!(engine.valid_command(line, cwd), valid, "warm: {line}");
+        }
+        // The service list is built but this service is not: still unverifiable.
+        let mut engine = Engine::new(path.clone(), root.clone());
+        engine.scan_path();
+        aws_labels(&mut engine, "aws r", &path);
+        assert!(!engine.valid_command("aws rds nope", cwd));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_changed_executable_is_a_new_install() {
+        let (root, path) = aws_cli::fake_install("stamp");
+        let cli = aws_cli::Cli::default();
+        let curated = spec::parse("aws.riga", "command aws").unwrap();
+        let stamp = |path: &str| cli.stamp(path, &curated).unwrap();
+        let before = stamp(&path);
+        let exe = root.join("aws-cli/v2/2.0.0/dist/aws");
+        let file = fs::OpenOptions::new().write(true).open(exe).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+        // A different PATH string forces the lookup to run again.
+        assert_ne!(before, stamp(&format!("{path}:")));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn own_flags_rank_before_inherited_ones_and_truncation_drops_inherited_first() {
+        let own: String = (0..140)
+            .map(|i| format!("    flag --f{i:03} \"F\"\n"))
+            .collect();
+        let text = format!(
+            "command r\n  flag --global|-g persistent \"G\"\n  command c\n    flag --aa-own \"O\"\n{own}  command d\n    flag --zed \"Z\"\n"
+        );
+        let nowhere = Path::new("/nonexistent-riga-test-directory");
+        let mut engine = Engine::new(String::new(), nowhere.into());
+        engine.specs = vec![spec::parse("r.riga", &text).unwrap()];
+        // Alphabetically `--global` sorts before `--own`, but it is inherited.
+        let got = labels(&mut engine, "r d --", nowhere);
+        assert_eq!(got, ["--zed", "--global"]);
+        let got = labels(&mut engine, "r c --", nowhere);
+        assert_eq!(got.len(), MAX_RESULTS);
+        assert!(got.contains(&"--aa-own".to_string()) && !got.contains(&"--global".to_string()));
+        assert_eq!(labels(&mut engine, "r c --glo", nowhere), ["--global"]);
+        // An exact match still wins.
+        assert_eq!(labels(&mut engine, "r c --global", nowhere)[0], "--global");
+    }
+    #[test]
+    fn aws_without_cli_data_stays_open_and_a_newer_install_is_picked_up() {
+        let (root, path) = aws_cli::fake_install("open");
+        let data = root.join("aws-cli/v2/2.0.0/dist/awscli");
+        fs::rename(&data, root.join("hidden")).unwrap();
+        let mut engine = Engine::new(path.clone(), root.clone());
+        let mut at = |buffer: &str| aws_labels(&mut engine, buffer, &path);
+        // Curated only: unknown services do not end completion; only global flags stay.
+        assert!(at("aws ").contains(&"s3".to_string()) && !at("aws ").contains(&"rds".to_string()));
+        assert_eq!(at("aws rds describe-db-instances --pro"), ["--profile"]);
+        assert_eq!(at("aws rds --foo bar --out"), ["--output"]);
+        assert!(!at("aws rds x --").contains(&"--version".to_string()));
+        assert!(at("aws s3 ls --nope --").is_empty());
+        engine.scan_path();
+        let cwd = Path::new("/nonexistent-riga-test-directory");
+        assert!(engine.valid_command("aws rds describe-db-instances", cwd));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn misspelt_value_sources_are_errors_but_other_labels_are_text() {
+        assert_eq!(
+            error_of("command t\n  flag --a <git-brnach> \"A\""),
+            "x.riga:2: unknown value source `<git-brnach>`"
+        );
+        assert!(error_of("command t\n  arg <aws-profle>").contains("<aws-profle>"));
+        for ok in ["<git-branch>", "<branch-name>", "<git>", "<gitlike-x>"] {
+            assert!(spec::parse("x.riga", &format!("command t\n  arg {ok}")).is_ok());
+        }
     }
     #[test]
     fn flags_continue_after_flags_and_positionals_and_hide_used_aliases() {

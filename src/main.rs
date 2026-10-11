@@ -519,9 +519,13 @@ fn complete(args: &[String]) -> io::Result<()> {
     });
     let mut items = engine.complete(&state);
     // A one-shot run has no next keystroke: wait (up to 10 s, for a model run) for background tool runs to finish,
-    // then retry. Each finished run sends a notification after clearing its busy flag.
-    if engine.background_busy() {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    // then retry. Each finished run sends a notification after clearing its busy flag. A finished
+    // run can start another (AWS: the service list, then the service's operations).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for _ in 0..3 {
+        if !engine.background_busy() {
+            break;
+        }
         while engine.background_busy() {
             let left = deadline.saturating_duration_since(Instant::now());
             if rx.recv_timeout(left).is_err() {
