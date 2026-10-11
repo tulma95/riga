@@ -1,0 +1,144 @@
+# Original Riga completion spec for Git (MIT). Format reference: docs/SPECS.md.
+# <git-branch>, <git-ref> and <git-remote> are read from the repository; text positionals still offer paths.
+command git nobundle "Distributed version control"
+  flag --version|-v "Print Git version"
+  flag --help|-h "Show Git help"
+  flag -C <directory> repeat chdir "Run relative to this directory"
+  flag -c <name=value> repeat "Set a configuration value (name=value)"
+  flag --no-pager "Print output without a pager"
+  flag --paginate|-p "Pipe output into a pager"
+  command add "Stage file changes"
+    flag --all|-A "Stage all changes"
+    flag --patch|-p "Interactively stage changes"
+    flag --update|-u "Stage changes to tracked files"
+    flag --dry-run|-n "Show changes without staging"
+    flag --verbose|-v "Show files as they are staged"
+    arg [<pathspec>] repeat "Files to stage"
+  command branch "List or create branches"
+    flag --all|-a "List local and remote branches"
+    flag --delete|-d "Delete a merged branch"
+    flag --force|-f "Force the requested branch operation"
+    flag --remotes|-r "List remote-tracking branches"
+    flag --verbose|-v repeat "Show commit information (repeat for upstream)"
+    arg [<git-branch>] "Branch to create or delete"
+    arg [<git-ref>] "Commit the new branch starts at"
+  command checkout "Switch branches or restore files"
+    flag --quiet|-q "Suppress progress output"
+    flag -b <new-branch> "Create and switch to a branch"
+    flag --force|-f "Discard local changes when switching"
+    arg [<git-branch>] "Branch, commit or path"
+    arg [<pathspec>] repeat "Paths to restore"
+  command clone "Clone a repository"
+    flag --branch|-b <branch> "Check out the named branch"
+    flag --depth <depth> "Limit history to this number of commits"
+    flag --recursive|--recurse-submodules "Initialize cloned submodules"
+    flag --quiet|-q "Suppress progress output"
+    arg <repository> "Repository URL or path"
+    arg [<directory>] "Destination directory"
+  command commit "Record staged changes"
+    flag --all|-a "Stage modified and deleted tracked files"
+    flag --amend "Amend the previous commit"
+    flag --message|-m <message> repeat "Set a commit message paragraph"
+    flag --file|-F <file> "Read commit message from a file"
+    flag --no-edit "Reuse the existing commit message"
+    flag --signoff|-s "Add a Signed-off-by trailer"
+    flag --verbose|-v repeat "Show the diff in the message editor"
+    flag --dry-run "Show what would be committed"
+    arg [<pathspec>] repeat "Commit only these paths"
+  command diff "Show changes"
+    flag --staged|--cached "Show staged changes"
+    flag --stat "Show a diff summary"
+    flag --name-only excludes=--name-status "Show only changed file names"
+    flag --name-status "Show file names and change types"
+    flag --output <file> "Write the patch to a file"
+    flag --quiet "Suppress diff output"
+    flag --color [{always,never,auto}] "Color the output (default always)"
+    arg [<git-ref>] repeat "Commits or paths to compare"
+  command fetch "Download remote objects"
+    flag --all "Fetch from all remotes"
+    flag --prune|-p "Remove deleted remote-tracking references"
+    flag --tags|-t "Fetch all tags"
+    flag --depth <depth> "Limit fetched history depth"
+    arg [<git-remote>] "Remote to fetch from"
+    arg [<refspec>] repeat "References to fetch"
+  command init "Create a repository"
+    flag --bare "Create a bare repository"
+    flag --initial-branch|-b <branch-name> "Set the initial branch name"
+    flag --quiet|-q "Suppress normal output"
+    arg [<directory>] "Repository directory"
+  command log "Show commit history"
+    flag --oneline "Compact commit output"
+    flag --graph "Draw commit graph"
+    flag --all "Show history from all references"
+    flag --max-count|-n <number> "Limit the number of commits"
+    flag --author <pattern> repeat "Filter commits by author"
+    flag --grep <pattern> repeat "Filter commit messages by pattern"
+    flag --stat "Show per-commit diff summaries"
+    flag --pretty [{oneline,short,medium,full,fuller,reference,email,raw}] "Commit output format"
+    arg [<git-ref>] "Commits to show"
+    arg [<path>] repeat "Limit to commits touching these paths"
+  command pull "Fetch and integrate changes"
+    flag --rebase|-r excludes=--no-rebase "Rebase local commits after fetching"
+    flag --ff-only "Allow only fast-forward updates"
+    flag --no-rebase "Merge after fetching"
+    arg [<git-remote>] "Remote to pull from"
+    arg [<git-branch>] repeat "Branches to integrate"
+  command push "Update a remote"
+    flag --set-upstream|-u "Set upstream for pushed branches"
+    flag --force-with-lease "Require the remote reference to match expectations"
+    flag --delete|-d "Delete remote references"
+    flag --tags "Push all tags"
+    flag --dry-run|-n "Show what would be pushed"
+    arg [<git-remote>] "Remote to push to"
+    arg [<git-branch>] repeat "Branches to push"
+  command rebase "Reapply commits"
+    flag --interactive|-i "Edit the sequence of commits"
+    flag --onto <git-ref> "Set the new base revision"
+    flag --continue excludes=--abort "Continue an in-progress rebase"
+    flag --abort "Abort an in-progress rebase"
+    arg [<git-ref>] "Upstream to rebase onto"
+    arg [<git-branch>] "Branch to rebase"
+  command restore "Restore working tree files"
+    flag --source|-s <git-ref> "Restore from this revision"
+    flag --staged|-S "Restore the index"
+    flag --worktree|-W "Restore working tree files"
+    flag --patch|-p "Select changes interactively"
+    arg <pathspec> repeat "Paths to restore"
+  command status "Show working tree state"
+    flag --short|-s "Compact status output"
+    flag --branch|-b "Show branch information"
+    flag --show-stash "Show the number of stashed entries"
+    flag --ignored "Show ignored files"
+    flag --porcelain "Produce machine-readable output"
+  command switch "Switch branches"
+    flag --create|-c <new-branch> "Create a new branch"
+    flag --force-create|-C <new-branch> "Create or reset a branch"
+    flag --detach|-d "Switch to a detached HEAD"
+    flag --quiet|-q "Suppress progress output"
+    arg [<git-branch>] "Branch to switch to"
+
+# Embedded tests: the buffer is quoted; each expectation's first character is + (shown) or - (absent).
+#test "git " => +status +commit +-C +--no-pager
+#test "git st" => +status -switch -commit
+#test "git -C . st" => +status
+#test "git -c core.pager=less status --s" => +--short +--show-stash
+#test "git -pCdir status --s" => ---short
+#test "git status -C dir --s" => ---short
+#test "git status --short " => +--branch +-b ---short --s
+#test "git status -sb -" => ---branch --b +--show-stash
+#test "git status file.txt -" => +-s +--porcelain
+#test "git status -- --" => ---short
+#test "git commit -m 'first' --" => +--message +--amend
+#test "git commit -m " => ---amend
+#test "git commit -Fmsg.txt --f" => ---file
+#test "git diff --cached --sta" => +--stat ---staged
+#test "git diff --name-only --name" => ---name-status
+#test "git diff --name-status --name" => ---name-only
+#test "git diff --color=" => +always +never +auto
+#test "git diff --color --st" => +--stat
+#test "git log --pretty=on" => +oneline -short
+#test "git rebase --continue --" => ---abort +--interactive
+#test "git rebase --abort --" => ---continue
+#test "git pull --no-rebase -" => ---rebase --r +--ff-only
+#test "git branch -v -" => +-v +--verbose
+#test "git add status --" => +--all -status

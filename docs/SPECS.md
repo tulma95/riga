@@ -1,0 +1,100 @@
+# Completion spec reference
+
+Tools are described by declarative, indentation-based `.riga` files. The bundled specs in `data/specs/` are original and compiled into the binary. A bundled spec applies only when its command is an executable on the shell's PATH, so uninstalled tools get no suggestions. No third-party completion data or implementation source was copied. See [research references](INTEGRATION-RESEARCH.md). This repository's code and specs use the MIT license.
+
+## Format
+
+Each line is one statement, indented two spaces per nesting level (tabs are an error), optionally followed by a `"description"`. A `#` starts a comment only at the beginning of a token (line start or after whitespace), so `{a#b}` is an ordinary choice.
+
+```text
+command docker "Manage containers"
+  flag --help|-h persistent "Print usage"
+  flag --log-level|-l {debug,info,warn,error,fatal} "Set the logging level"
+  command run "Create and run a container"
+    flag --interactive|-i "Keep STDIN open"
+    flag --rm excludes=--restart "Remove the container when it exits"
+    flag --restart {no,always,on-failure,unless-stopped} "Restart policy"
+    flag --ip <address> requires=--network "IPv4 address"
+    flag --network <network> "Connect to a network"
+    arg <image> stop "Image to run"
+    arg [<command>] repeat "Command and arguments"
+```
+
+| Statement | Form | Attributes |
+| --- | --- | --- |
+| `command` | `command NAME[\|ALIAS...]` | `nobundle`: no multi-flag short bundles at this level (attached values such as `-Cdir` still work) |
+| `flag` | `flag NAME[\|ALIAS...] [VALUE]` | `repeat`, `persistent` (also visible in subcommands), `chdir` (needs `<directory>`; later paths resolve from it), `requires=--a,--b` (hidden until all are used), `excludes=--a` (symmetric) |
+| `arg` | `arg VALUE` | `repeat` (absorbs the remaining positionals; must be last), `stop` (after this arg, stop option parsing and spec suggestions; any later args document usage only and are not completed) |
+
+### Values
+
+- `<file>` and `<directory>` use the filesystem provider.
+- `<git-branch>`, `<git-ref>` and `<git-remote>` read local data. See [Built-in value sources](#built-in-value-sources).
+- Any other `<label>` is free text.
+- `{a,b,c}` lists choices.
+- `[VALUE]` makes a value optional. An optional flag value is only recognized attached (`--color=auto`) and never consumes the next word. On an arg, `[]` is documentation only, since positionals always fill args in order.
+
+### Names and validation
+
+- Depth 0 is exactly one `command`, the executable name. Only commands have children.
+- Command names must not start with `-`. Flag names must.
+- `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split.
+- Load errors: duplicate spellings in one scope or statement, duplicate attributes or references, unresolved `requires`/`excludes` references, unknown keywords or attributes, a description without a statement, and empty choices. They are reported as `file:line: message`, sorted by line, at most 100 per file. Children of a rejected `command` are skipped rather than reported.
+- A leading UTF-8 byte order mark is ignored.
+- Limits: nesting depth 32, at most 64 names per statement and 128 characters per name, descriptions of at most 200 characters without control or bidirectional characters (choices are checked the same way), 1 MiB per file. The number of flags, subcommands and choices is not capped. Completion ranks lightweight candidates and builds at most 64 suggestions.
+- Choices have no per-choice descriptions. Test expectation labels cannot contain spaces.
+
+## How completion follows the words
+
+- A word matching a subcommand descends, only before the current command has consumed a positional. Visible flags are the current command's plus ancestors' `persistent` flags. Other ancestor flags are valid only before descending (`git -C dir status`, but not `git status -C dir`).
+- Used non-`repeat` flags disappear under every spelling. `git status --short ` still offers `--branch`. `git commit -m "First" ` offers another `--message`.
+- Flag values: choices are offered as `value` suggestions (`git log --pretty=on` gives `--pretty=oneline`). `<file>`/`<directory>` use the filesystem. Other text values offer nothing.
+- Positionals fill `arg`s in order. Choice args offer only their choices. `<directory>` args offer only directories. Text and Git args still offer paths after their own suggestions. A leaf without declared args accepts any positionals. An unknown word after a command that has subcommands but no args stops spec suggestions.
+- `--` ends option parsing. Later args are still completed by type. Unknown options stop spec suggestions because their arity is unknown.
+- Filesystem suggestions are suppressed after a completed `chdir` value (such as `git -C`) beginning with `~`, whose original quoting cannot be established from the decoded preceding tokens. Use an absolute path for that case.
+- The spec is chosen by the first word only, so wrappers such as `sudo git ...`, `env ... git` or `command git` get no spec completion.
+- Specs cannot run code, shell generators or callbacks. Dynamic values come only from the built-in sources below.
+
+## Bundled specs and tools
+
+Only the specs bundled in `data/specs/` are loaded; they are compiled into the binary and apply only to commands found on the shell's PATH. User-supplied specs are not supported. Error messages escape control and bidirectional characters from the spec text they quote, so a spec cannot send terminal escape sequences through `check-spec`.
+
+```sh
+riga check-spec path/to/tool.riga     # validate specific files; exits 1 on any error or failed test
+riga complete --cwd /tmp "git diff --color="   # dry run: label, kind, description, insert per line
+riga doctor                           # lists the bundled specs active for the current PATH
+```
+
+### Tests
+
+Any line beginning with `#test` (after indentation) must be a valid test, so near misses such as `#testing` are errors rather than silent comments. A line `#test "<buffer>" => +shown -absent` completes the quoted buffer (cursor at the end, `\"` and `\\` escapes, trailing spaces significant) with only that spec. The filesystem and PATH are never read, even for absolute paths. The first character of each expectation is its sign, so `---short` means `--short` must be absent.
+
+```text
+#test "git status -sb -" => +--show-stash ---branch --b
+```
+
+`cargo test` runs every bundled `#test`. `riga check-spec` runs them for any spec.
+
+## Built-in value sources
+
+Sources read local files and never run the tool. Rules shared by all of them:
+
+- Only regular files are read. FIFOs, devices and directories with a manifest's name are ignored, so they cannot hang the worker.
+- Invalid UTF-8 is read lossily. Non-UTF-8 directory entries are skipped.
+- Names containing control or bidirectional characters, empty names, and names over 256 characters are dropped. Duplicates keep the first description. Descriptions are cut to 100 characters, and one with control or bidirectional characters is blanked.
+- Names are sorted, then capped, so an oversized source yields the first names alphabetically.
+- "Paths" below means file system paths are offered next to the values. Git tokens do so for positionals only, not flag values.
+
+| Token(s) | Lists | Read from | Paths | Not followed |
+| --- | --- | --- | --- | --- |
+| `<git-branch>`, `<git-ref>`, `<git-remote>` | Branches, refs, remotes | The repository files (see [Git refs](#git-refs)) | Positionals | Fetching, `git` itself |
+
+### Git refs
+
+Git values are read directly from the repository files, never by running `git`. Riga finds the repository from the working directory (or a `git -C` directory), following `.git` files of worktrees and submodules, and lists `refs/` plus `packed-refs`.
+
+- `<git-branch>`: local branches (the checked-out one is labelled "Current branch"), plus branches that exist only on a remote, offered by the short name `git switch`/`git checkout` turn into a tracking branch.
+- `<git-ref>`: local branches, remote-tracking branches (`origin/main`) and tags.
+- `<git-remote>`: remotes from `.git/config` and fetched remote refs.
+
+Riga never fetches. Branches pushed by others appear after your own `git fetch` or `git pull`. Suggestions are capped at 20,000 refs and a 16 MiB `packed-refs`. Names with control or bidirectional characters are hidden. The bundled Git spec uses these for `checkout`, `switch`, `branch`, `rebase`, `restore --source`, `log`, `diff`, `fetch`, `pull` and `push`.

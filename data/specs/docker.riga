@@ -1,0 +1,135 @@
+# Original Riga completion spec for a Docker CLI subset (MIT). Format reference: docs/SPECS.md.
+# Image, container, service and network names are not generated.
+# Args after a `stop` arg document usage only: once the stop arg is filled, only plain paths are offered.
+command docker "Manage containers, images and Compose projects"
+  flag --help|-h persistent "Print usage"
+  flag --config <directory> "Location of client configuration files"
+  flag --context|-c <context> "Name of the context to use"
+  flag --debug|-D "Enable debug mode"
+  flag --host|-H <socket> repeat "Daemon socket to connect to"
+  flag --log-level|-l {debug,info,warn,error,fatal} "Set the logging level"
+  flag --version|-v "Print version information"
+  command run "Create and run a new container from an image"
+    flag --detach|-d "Run the container in the background"
+    flag --interactive|-i "Keep STDIN open"
+    flag --tty|-t "Allocate a pseudo-TTY"
+    flag --name <name> "Assign a name to the container"
+    flag --rm excludes=--restart "Remove the container when it exits"
+    flag --restart {no,always,on-failure,unless-stopped} "Restart policy"
+    flag --env|-e <name=value> repeat "Set an environment variable"
+    flag --env-file <file> repeat "Read environment variables from a file"
+    flag --publish|-p <host:container> repeat "Publish a container port"
+    flag --volume|-v <source:target> repeat "Bind mount a volume"
+    flag --workdir|-w <path> "Working directory inside the container"
+    flag --network <network> "Connect the container to a network"
+    flag --ip <address> requires=--network "IPv4 address on the network"
+    flag --hostname|-h <name> "Container host name"
+    flag --pull {always,missing,never} "Pull the image before running"
+    flag --cidfile <file> "Write the container ID to a file"
+    arg <image> stop "Image to run"
+    arg [<command>] repeat "Command and arguments for the container"
+  command exec "Run a command in a running container"
+    flag --detach|-d "Run the command in the background"
+    flag --interactive|-i "Keep STDIN open"
+    flag --tty|-t "Allocate a pseudo-TTY"
+    flag --env|-e <name=value> repeat "Set an environment variable"
+    flag --user|-u <user> "User to run the command as"
+    flag --workdir|-w <path> "Working directory inside the container"
+    arg <container> stop "Container to run in"
+    arg <command> repeat "Command and arguments"
+  command build "Build an image"
+    flag --file|-f <file> "Name of the Dockerfile"
+    flag --tag|-t <name:tag> repeat "Name and optionally tag the image"
+    flag --build-arg <name=value> repeat "Set a build-time variable"
+    flag --no-cache "Do not use cache when building"
+    flag --target <stage> "Build stage to target"
+    flag --platform <platform> "Target platform"
+    flag --progress {auto,plain,tty} "Progress output type"
+    arg <directory> "Build context"
+  command pull "Download an image"
+    flag --all-tags|-a "Download all tagged images"
+    flag --platform <platform> "Target platform"
+    flag --quiet|-q "Suppress verbose output"
+    arg <image> "Image to pull"
+  command images "List images"
+    flag --all|-a "Show all images"
+    flag --quiet|-q "Only show image IDs"
+    flag --filter|-f <filter> repeat "Filter output"
+  command ps "List containers"
+    flag --all|-a "Show all containers"
+    flag --quiet|-q "Only display container IDs"
+    flag --size|-s "Display total file sizes"
+    flag --filter|-f <filter> repeat "Filter output"
+  command container "Manage containers"
+    command ls|list|ps "List containers"
+      flag --all|-a "Show all containers"
+      flag --quiet|-q "Only display container IDs"
+      flag --size|-s "Display total file sizes"
+      flag --filter|-f <filter> repeat "Filter output"
+    command rm|remove "Remove containers"
+      flag --force|-f "Force removal of a running container"
+      flag --volumes|-v "Remove anonymous volumes"
+      arg <container> repeat "Containers to remove"
+    command logs "Fetch container logs"
+      flag --follow|-f "Follow log output"
+      flag --tail|-n <lines> "Number of lines from the end"
+      flag --timestamps|-t "Show timestamps"
+      arg <container> "Container"
+  command compose "Define and run multi-container applications"
+    flag --file|-f <file> repeat "Compose configuration file"
+    flag --project-name|-p <name> "Project name"
+    flag --project-directory <directory> "Alternate working directory"
+    flag --profile <profile> repeat "Enable a profile"
+    flag --env-file <file> repeat "Alternate environment file"
+    flag --dry-run "Execute in dry run mode"
+    command up "Create and start containers"
+      flag --detach|-d "Run containers in the background"
+      flag --build "Build images before starting containers"
+      flag --force-recreate excludes=--no-recreate "Recreate containers even if unchanged"
+      flag --no-recreate "Keep existing containers"
+      flag --remove-orphans "Remove containers not defined in the Compose file"
+      flag --pull {always,missing,never} "Pull images before starting"
+      flag --wait "Wait for services to be running or healthy"
+      arg [<service>] repeat "Services to start"
+    command down "Stop and remove containers and networks"
+      flag --volumes|-v "Remove named volumes"
+      flag --remove-orphans "Remove containers not defined in the Compose file"
+      flag --rmi {local,all} "Remove images used by services"
+      arg [<service>] repeat "Services to remove"
+    command logs "View output from containers"
+      flag --follow|-f "Follow log output"
+      flag --tail|-n <lines> "Number of lines from the end"
+      flag --timestamps|-t "Show timestamps"
+      arg [<service>] repeat "Services to show"
+    command ps "List containers"
+      flag --all|-a "Show all stopped containers"
+      flag --quiet|-q "Only display IDs"
+      arg [<service>] repeat "Services to list"
+
+#test "docker " => +run +compose +container +--log-level +-D
+#test "docker --log-level " => +debug +fatal --D -run
+#test "docker -l w" => +warn
+#test "docker --log-level=e" => +error
+#test "docker -H a -H b " => +run +-H
+#test "docker run --log" => ---log-level
+#test "docker run --he" => +--help
+#test "docker compose up --" => +--build +--help ---file ---dry-run
+#test "docker compose -f a.yml -p demo -" => +-f --p +--dry-run
+#test "docker compose -f a.yml up -" => +-d
+#test "docker compose up --force-recreate --no" => ---no-recreate
+#test "docker compose up --no-recreate --f" => ---force-recreate
+#test "docker compose down --rmi " => +local +all
+#test "docker container " => +ls +list +ps +rm
+#test "docker container list -" => +--all +-q
+#test "docker container ps --all -" => ---all --a +-q
+#test "docker run --rm --re" => ---restart
+#test "docker run --restart always --" => ---rm
+#test "docker run --restart " => +unless-stopped +on-failure
+#test "docker run --restart=on" => +on-failure
+#test "docker run --" => ---ip +--network
+#test "docker run --network host --" => +--ip
+#test "docker run -it -" => --i --t ---tty +-d
+#test "docker run -it ubuntu --" => ---name
+#test "docker run -e A=1 -e B=2 -" => +-e
+#test "docker exec -it app --" => ---user
+#test "docker build --progress=p" => +plain
