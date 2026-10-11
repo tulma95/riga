@@ -205,6 +205,14 @@ def check_zle(tmp):
         state(command, len(command))
         drain(0.3)
         assert not ai_marker.exists(), "AI suggestion executed"
+        # Plugins that wrap every widget call builtins as `.name`, so none of ours may be builtin.
+        builtins = tmp / "builtin-widgets"
+        send("\x15print -r -- ${(M)${(k)widgets[(R)builtin]}:#riga-*} > " + shlex.quote(str(builtins)) + "\n")
+        deadline = time.monotonic() + 4
+        while not builtins.exists() and time.monotonic() < deadline:
+            drain(0.02)
+        drain(0.1)
+        assert builtins.read_text().strip() == "", builtins.read_text()
         # Reload must discard saved macro metadata before capturing a new widget.
         source = shlex.quote(str(ROOT / "shell/riga.zsh"))
         send("\x15riga-unload; bindkey -s '^N' 'macro-original'; source " + source + "\n")

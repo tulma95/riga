@@ -186,6 +186,10 @@ _riga_bind() {
   original=${(Q)parts[-1]}
   if [[ ${parts[2]-} == -s ]]; then
     _RIGA_OLD_MACRO[$widget]=$original
+  elif [[ ${widgets[$original]-} == builtin ]]; then
+    # An alias of a builtin also reports as builtin, and plugins that wrap every
+    # widget (zsh-autosuggestions, zsh-syntax-highlighting) then call `.alias`.
+    _RIGA_OLD_WIDGET[$widget]=.${original#.}
   else
     zle -A "$original" "${widget}-original" 2>/dev/null || return 0
     _RIGA_OLD_WIDGET[$widget]="${widget}-original"
