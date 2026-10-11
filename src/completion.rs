@@ -162,7 +162,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 15] = [
+const BUNDLED_SPECS: [(&str, &str); 16] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -219,6 +219,10 @@ const BUNDLED_SPECS: [(&str, &str); 15] = [
     (
         "data/specs/terraform.riga",
         include_str!("../data/specs/terraform.riga"),
+    ),
+    (
+        "data/specs/curl.riga",
+        include_str!("../data/specs/curl.riga"),
     ),
 ];
 fn bundled_specs() -> Vec<Spec> {
@@ -933,7 +937,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 15);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 16);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"

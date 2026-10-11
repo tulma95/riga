@@ -39,6 +39,8 @@ command docker "Manage containers"
 - Depth 0 is exactly one `command`, the executable name. Only commands have children.
 - Command names must not start with `-`. Flag names must.
 - `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split. A value-taking one also accepts an attached `=` value (`-var-file=dev.tfvars`), while `-x=v` keeps `=v` as the value.
+- Names use only alphanumerics and `-_.:+@%/`, so an option such as curl's `-#` cannot be declared (the curl spec offers `--progress-bar` instead).
+- `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split.
 - Load errors: duplicate spellings in one scope or statement, duplicate attributes or references, unresolved `requires`/`excludes` references, unknown keywords or attributes, a description without a statement, and empty choices. They are reported as `file:line: message`, sorted by line, at most 100 per file. Children of a rejected `command` are skipped rather than reported.
 - A leading UTF-8 byte order mark is ignored.
 - Limits: nesting depth 32, at most 64 names per statement and 128 characters per name, descriptions of at most 200 characters without control or bidirectional characters (choices are checked the same way), 1 MiB per file. The number of flags, subcommands and choices is not capped. Completion ranks lightweight candidates and builds at most 64 suggestions.

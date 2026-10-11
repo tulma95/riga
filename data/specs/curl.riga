@@ -1,0 +1,144 @@
+# Original Riga completion spec for a curl 8.x subset (MIT). Format reference: docs/SPECS.md.
+# URLs, headers, data, credentials and hosts are free text; only file and directory values complete paths. `-#` is omitted (not a valid spec name); use --progress-bar.
+command curl "Transfer data from or to a server"
+  # Request
+  flag --request|-X {GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS} "HTTP method to use"
+  flag --request-target <path> "Target to send instead of the URL path"
+  flag --header|-H <header> repeat "Add a request header, or @file to read headers from"
+  flag --get|-G "Send -d data as a URL query string with GET"
+  flag --head|-I excludes=--data,--json,--form "Fetch headers only"
+  flag --url <url> repeat "URL to fetch"
+  flag --url-query <name=value> repeat "Add a URL-encoded query parameter"
+  flag --globoff|-g "Do not treat {} and [] in URLs as globs"
+  flag --path-as-is "Do not squash /../ and /./ in the URL path"
+  flag --location|-L "Follow redirects"
+  flag --max-redirs <num> "Maximum number of redirects to follow"
+  flag --post301 "Keep POST after a 301 redirect"
+  flag --post302 "Keep POST after a 302 redirect"
+  flag --post303 "Keep POST after a 303 redirect"
+  flag --range|-r <range> "Fetch only a byte range, such as 0-499"
+  flag --continue-at|-C <offset> "Resume at a byte offset, or - to work it out"
+  flag --time-cond|-z <time> "Only fetch if modified since a date or a file's mtime"
+  flag --compressed "Request a compressed response and decompress it"
+  flag --user-agent|-A <name> "User-Agent header to send"
+  flag --referer|-e <url> "Referer header to send"
+  # Body
+  flag --data|-d <data> repeat "Send POST data, or @file to read it from a file"
+  flag --data-raw <data> repeat "Send POST data without treating @ specially"
+  flag --data-binary <data> repeat "Send POST data exactly as given, or @file"
+  flag --data-urlencode <data> repeat "URL-encode and send POST data"
+  flag --data-ascii <data> repeat "Send POST data, same as --data"
+  flag --json <data> repeat "Send JSON data with JSON headers, or @file"
+  flag --form|-F <name=content> repeat "Send a multipart form field; @file uploads a file"
+  flag --form-string <name=string> repeat "Send a multipart form field literally"
+  flag --upload-file|-T <file> repeat "Upload a file with PUT"
+  # Output
+  flag --output|-o <file> repeat "Write the body to a file"
+  flag --output-dir <directory> "Directory to save output files in"
+  flag --create-dirs "Create missing directories for --output"
+  flag --remote-name|-O repeat "Save to a file named after the URL"
+  flag --remote-name-all "Use --remote-name for every URL"
+  flag --remote-header-name|-J "Use the Content-Disposition file name"
+  flag --remote-time|-R "Set the local file's time to the remote one"
+  flag --dump-header|-D <file> "Write response headers to a file"
+  flag --include|-i "Include response headers in the output"
+  flag --write-out|-w <format> "Print information after the transfer, or @file"
+  flag --stderr <file> "Redirect stderr to a file"
+  flag --no-buffer|-N "Disable output buffering"
+  flag --xattr "Store metadata in extended file attributes"
+  flag --etag-save <file> "Save the response ETag to a file"
+  flag --etag-compare <file> "Fetch only if the ETag differs from the one in a file"
+  # Verbosity and errors
+  flag --verbose|-v "Show request and response details"
+  flag --trace <file> "Write a full trace, including data, to a file"
+  flag --trace-ascii <file> "Write a full trace without hex to a file"
+  flag --silent|-s "Hide the progress meter and errors"
+  flag --show-error|-S "Show errors even with --silent"
+  flag --no-progress-meter "Hide only the progress meter"
+  flag --progress-bar "Show a simple progress bar"
+  flag --fail|-f excludes=--fail-with-body "Fail silently on HTTP errors"
+  flag --fail-with-body "Fail on HTTP errors but still output the body"
+  # Authentication
+  flag --user|-u <user:password> "Server user name and password"
+  flag --oauth2-bearer <token> "OAuth 2 bearer token"
+  flag --basic "Use HTTP Basic authentication"
+  flag --digest "Use HTTP Digest authentication"
+  flag --ntlm "Use HTTP NTLM authentication"
+  flag --negotiate "Use SPNEGO authentication"
+  flag --anyauth "Pick the most secure method the server supports"
+  flag --aws-sigv4 <provider> "Sign requests with AWS V4 signatures"
+  flag --netrc|-n excludes=--netrc-optional "Read credentials from ~/.netrc"
+  flag --netrc-optional "Use ~/.netrc if it exists"
+  flag --netrc-file <file> "Read credentials from this netrc file"
+  # Cookies
+  flag --cookie|-b <file> repeat "Send cookies from a string or a cookie file"
+  flag --cookie-jar|-c <file> "Write cookies to a file after the transfer"
+  flag --junk-session-cookies|-j "Ignore session cookies read from a file"
+  # TLS
+  flag --insecure|-k "Skip TLS certificate verification"
+  flag --cacert <file> "CA certificate bundle to verify with"
+  flag --capath <directory> "Directory of CA certificates"
+  flag --cert|-E <file> "Client certificate, optionally file:password"
+  flag --cert-type {PEM,DER,ENG,P12} "Client certificate type"
+  flag --key <file> "Private key for the client certificate"
+  flag --key-type {PEM,DER,ENG} "Private key type"
+  flag --pinnedpubkey <file> "Public key or sha256// hashes to pin"
+  flag --tlsv1.2 "Use TLS 1.2 or later"
+  flag --tlsv1.3 "Use TLS 1.3 or later"
+  flag --tls-max {1.0,1.1,1.2,1.3,default} "Highest TLS version to allow"
+  flag --ssl-reqd "Require TLS for the connection"
+  flag --proto <protocols> "Protocols to allow, such as =https"
+  # Protocol versions
+  flag --http1.0|-0 excludes=--http1.1,--http2,--http3 "Use HTTP/1.0"
+  flag --http1.1 excludes=--http2,--http3 "Use HTTP/1.1"
+  flag --http2 excludes=--http3 "Use HTTP/2"
+  flag --http3 "Use HTTP/3"
+  flag --ipv4|-4 excludes=--ipv6 "Resolve names to IPv4 addresses only"
+  flag --ipv6|-6 "Resolve names to IPv6 addresses only"
+  # Connection
+  flag --resolve <host:port:addr> repeat "Use this address for a host and port"
+  flag --connect-to <host:port:host:port> repeat "Connect to another host and port instead"
+  flag --proxy|-x <url> "Proxy to use"
+  flag --proxy-user|-U <user:password> "Proxy user name and password"
+  flag --noproxy <hosts> "Hosts that bypass the proxy"
+  flag --socks5-hostname <host:port> "SOCKS5 proxy that resolves names"
+  flag --unix-socket <file> "Connect through a Unix domain socket"
+  flag --interface <name> "Network interface or address to use"
+  flag --max-time|-m <seconds> "Maximum time for the whole transfer"
+  flag --connect-timeout <seconds> "Maximum time to connect"
+  flag --keepalive-time <seconds> "Idle time before keepalive probes"
+  flag --no-keepalive "Disable TCP keepalive"
+  flag --limit-rate <speed> "Maximum transfer rate, such as 100K or 1M"
+  flag --max-filesize <bytes> "Do not download files larger than this"
+  flag --retry <num> "Retry transient failures this many times"
+  flag --retry-delay <seconds> requires=--retry "Wait this long between retries"
+  flag --retry-max-time <seconds> requires=--retry "Stop retrying after this long"
+  flag --retry-all-errors requires=--retry "Retry on any error"
+  flag --retry-connrefused requires=--retry "Retry on connection refused"
+  # Parallel and config
+  flag --parallel|-Z "Do transfers in parallel"
+  flag --parallel-max <num> requires=--parallel "Maximum parallel transfers"
+  flag --parallel-immediate requires=--parallel "Prefer new connections over waiting to reuse"
+  flag --config|-K <file> repeat "Read options from a config file"
+  flag --disable|-q "Do not read ~/.curlrc (must be first)"
+  flag --help|-h "Print usage"
+  flag --manual|-M "Print the full manual"
+  flag --version|-V "Print version and features"
+  arg <url> repeat "URLs to fetch"
+#test "curl --re" => +--request +--resolve +--retry ---head
+#test "curl -X " => +GET +POST +PATCH +OPTIONS
+#test "curl --request=P" => +POST +PUT +PATCH -GET
+#test "curl -L --lo" => ---location
+#test "curl -sSL https://example.com --" => ---silent ---show-error ---location +--output
+#test "curl -H 'Accept: a' -H 'B: c' --hea" => +--header +--head
+#test "curl -I --da" => ---data +--data-raw
+#test "curl -d x --he" => ---head +--header
+#test "curl --fail --fail" => ---fail-with-body
+#test "curl --ret" => +--retry ---retry-delay ---retry-all-errors
+#test "curl --retry 3 --retry-" => +--retry-delay +--retry-all-errors
+#test "curl --http2 --http" => ---http1.1 ---http3 ---http1.0
+#test "curl -4 --ipv" => ---ipv6
+#test "curl --tls-max " => +1.2 +1.3 +default
+#test "curl -o out.json --out" => +--output +--output-dir
+#test "curl -Z --parallel-" => +--parallel-max
+#test "curl -X" => +-X
