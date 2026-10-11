@@ -3,6 +3,7 @@ pub mod aws;
 pub mod background;
 pub mod brew;
 pub mod cargo_toml;
+pub mod cdk;
 pub mod completion;
 pub mod docker;
 pub mod ffmpeg;

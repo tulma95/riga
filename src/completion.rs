@@ -162,7 +162,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 17] = [
+const BUNDLED_SPECS: [(&str, &str); 18] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -227,6 +227,10 @@ const BUNDLED_SPECS: [(&str, &str); 17] = [
     (
         "data/specs/aws.riga",
         include_str!("../data/specs/aws.riga"),
+    ),
+    (
+        "data/specs/cdk.riga",
+        include_str!("../data/specs/cdk.riga"),
     ),
 ];
 fn bundled_specs() -> Vec<Spec> {
@@ -941,7 +945,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 17);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 18);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"
@@ -2043,6 +2047,28 @@ command t "Test tool"
             ("ripgrep".into(), "14.1.0 rg".into())
         );
         fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    fn cdk_profiles_and_stacks_come_from_local_files() {
+        let root = std::env::temp_dir().join(format!("riga-cdk-values-{}", std::process::id()));
+        fs::create_dir_all(root.join(".aws")).unwrap();
+        fs::create_dir_all(root.join("cdk.out")).unwrap();
+        fs::write(root.join(".aws/config"), "[profile dev]\n").unwrap();
+        fs::write(
+            root.join("cdk.out/manifest.json"),
+            r#"{"artifacts": {"Api": {"type": "aws:cloudformation:stack"}}}"#,
+        )
+        .unwrap();
+        let labels = |buffer: &str| -> Vec<String> {
+            complete_in(buffer, &root)
+                .into_iter()
+                .map(|s| s.label)
+                .collect()
+        };
+        assert_eq!(labels("cdk deploy --profile "), ["dev"]);
+        assert_eq!(labels("cdk --profile dev diff A"), ["Api"]);
+        assert_eq!(labels("cdk destroy Api A"), ["Api"]);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn rustup_toolchains_come_from_home() {
