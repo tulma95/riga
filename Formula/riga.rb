@@ -1,8 +1,8 @@
 class Riga < Formula
   desc "Local zsh/iTerm2 autocomplete for macOS"
   homepage "https://github.com/tulma95/riga"
-  url "https://github.com/tulma95/riga/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "38b8bf9d3aa438a66f1487dec26d4e1abbc9955bb1e641117ef30e7b13a675c5"
+  url "https://github.com/tulma95/riga/archive/refs/tags/v0.1.1.tar.gz"
+  sha256 "7619feb1b6d2b03a9c67e87102b86848220e30a8da4f9500138844f53c5ae936"
   license "MIT"
   head "https://github.com/tulma95/riga.git", branch: "main"
 
