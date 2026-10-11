@@ -3,7 +3,7 @@
 //! and docker, cached background runs) and never depend on the spec model.
 use crate::{
     background::Runs, brew, cargo_toml, docker, ffmpeg, git, kube, names::Ref, npm, ollama,
-    pyproject, rustup, tmux, vscode,
+    pyproject, rustup, terraform, tmux, vscode,
 };
 use std::path::Path;
 /// Everything a source may consult; all of it comes from the request or the engine, never from the
@@ -29,6 +29,7 @@ pub enum Source {
     Tmux(tmux::Kind),
     Ffmpeg(ffmpeg::Kind),
     Docker(docker::Kind),
+    Terraform(terraform::Kind),
 }
 /// Spec value tokens (`<token>`) and their sources.
 const TOKENS: &[(&str, Source)] = &[
@@ -114,6 +115,18 @@ const TOKENS: &[(&str, Source)] = &[
         "ffmpeg-audio-filter",
         Source::Ffmpeg(ffmpeg::Kind::AudioFilter),
     ),
+    (
+        "terraform-workspace",
+        Source::Terraform(terraform::Kind::Workspace),
+    ),
+    (
+        "terraform-var-file",
+        Source::Terraform(terraform::Kind::VarFile),
+    ),
+    (
+        "terraform-resource",
+        Source::Terraform(terraform::Kind::Resource),
+    ),
 ];
 impl Source {
     pub fn parse(token: &str) -> Option<Source> {
@@ -134,6 +147,7 @@ impl Source {
             Source::Tmux(k) => tmux::complete(env, k),
             Source::Ffmpeg(k) => ffmpeg::complete(env, k),
             Source::Docker(k) => docker::complete(env, k),
+            Source::Terraform(k) => terraform::complete(env, k),
         }
     }
     /// The suggestion kind shown for its candidates.
@@ -166,7 +180,8 @@ impl Source {
             | Source::Vscode(_)
             | Source::Tmux(_)
             | Source::Ffmpeg(_)
-            | Source::Docker(_) => false,
+            | Source::Docker(_)
+            | Source::Terraform(_) => false,
         }
     }
 }

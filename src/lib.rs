@@ -18,6 +18,7 @@ pub mod rustup;
 pub mod session;
 pub mod sources;
 pub mod spec;
+pub mod terraform;
 pub mod tmux;
 pub mod toml;
 pub mod vscode;

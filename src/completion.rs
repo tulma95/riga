@@ -162,7 +162,7 @@ pub fn quote_word(s: &str) -> String {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
-const BUNDLED_SPECS: [(&str, &str); 14] = [
+const BUNDLED_SPECS: [(&str, &str); 15] = [
     (
         "data/specs/git.riga",
         include_str!("../data/specs/git.riga"),
@@ -216,6 +216,10 @@ const BUNDLED_SPECS: [(&str, &str); 14] = [
         include_str!("../data/specs/tmux.riga"),
     ),
     ("data/specs/uv.riga", include_str!("../data/specs/uv.riga")),
+    (
+        "data/specs/terraform.riga",
+        include_str!("../data/specs/terraform.riga"),
+    ),
 ];
 fn bundled_specs() -> Vec<Spec> {
     BUNDLED_SPECS
@@ -334,6 +338,9 @@ impl<'a> SpecContext<'a> {
             let flag = spec.flag(self.command, name)?;
             return self.takes_value(flag).map(|_| (vec![flag], None));
         }
+        if let Some((_, _, flag)) = self.single_dash_value(word) {
+            return Some((vec![flag], None));
+        }
         let mut used = vec![];
         let mut letters = word.strip_prefix('-')?.chars().peekable();
         while let Some(letter) = letters.next() {
@@ -349,6 +356,17 @@ impl<'a> SpecContext<'a> {
         }
         (!used.is_empty()).then_some((used, None))
     }
+    /// `-name=value` for a value-taking single-dash long flag (`terraform -var-file=x`). Short flags
+    /// keep `-m=x` as the value `=x`, since the name must be a declared multi-letter spelling.
+    fn single_dash_value<'w>(&self, word: &'w str) -> Option<(&'w str, &'w str, usize)> {
+        let (name, value) = word.split_once('=')?;
+        if name.starts_with("--") || name.chars().count() <= 2 {
+            return None;
+        }
+        let flag = self.spec?.flag(self.command, name)?;
+        self.takes_value(flag)?;
+        Some((&word[..name.len() + 1], value, flag))
+    }
     /// Split a current option's attached value, preserving its spelling during replacement.
     fn attached_value<'w>(&self, prefix: &'w str) -> Option<(&'w str, &'w str, usize)> {
         let spec = self.spec?;
@@ -357,6 +375,9 @@ impl<'a> SpecContext<'a> {
             let flag = spec.flag(self.command, name)?;
             self.takes_value(flag)?;
             return Some((&prefix[..name.len() + 1], value, flag));
+        }
+        if let Some(found) = self.single_dash_value(prefix) {
+            return Some(found);
         }
         // `-cp` may be a single-dash long flag being typed, not `-c` with value `p`.
         let typing_flag = self.visible.iter().any(|&f| {
@@ -912,7 +933,7 @@ mod tests {
             assert!(spec.tests.len() >= 10, "{label}");
             assert_eq!(spec_test_failures(&spec, label), Vec::<String>::new());
         }
-        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 14);
+        assert_eq!(Engine::new(String::new(), "/".into()).specs.len(), 15);
     }
     const TEST_SPEC: &str = r#"
 command t "Test tool"

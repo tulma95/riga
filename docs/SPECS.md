@@ -38,7 +38,7 @@ command docker "Manage containers"
 
 - Depth 0 is exactly one `command`, the executable name. Only commands have children.
 - Command names must not start with `-`. Flag names must.
-- `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split.
+- `--x` is long. `-x` is short and bundleable as `-sb`, with a value-taking flag ending the bundle (`-mmsg`). `-xyz` is a single-dash long name that is never split. A value-taking one also accepts an attached `=` value (`-var-file=dev.tfvars`), while `-x=v` keeps `=v` as the value.
 - Load errors: duplicate spellings in one scope or statement, duplicate attributes or references, unresolved `requires`/`excludes` references, unknown keywords or attributes, a description without a statement, and empty choices. They are reported as `file:line: message`, sorted by line, at most 100 per file. Children of a rejected `command` are skipped rather than reported.
 - A leading UTF-8 byte order mark is ignored.
 - Limits: nesting depth 32, at most 64 names per statement and 128 characters per name, descriptions of at most 200 characters without control or bidirectional characters (choices are checked the same way), 1 MiB per file. The number of flags, subcommands and choices is not capped. Completion ranks lightweight candidates and builds at most 64 suggestions.
@@ -109,6 +109,9 @@ Sources read local files and never run the tool, except tmux, ffmpeg and docker 
 | `<tmux-session>`, `<tmux-window>`, `<tmux-pane>`, `<tmux-buffer>` | Names on the default tmux server | Background run of `tmux list-... -F ...` | No | `-L`, `-S` |
 | `<ffmpeg-encoder>`, `<ffmpeg-video-encoder>`, `<ffmpeg-audio-encoder>`, `<ffmpeg-subtitle-encoder>`, `<ffmpeg-format>`, `<ffmpeg-video-filter>`, `<ffmpeg-audio-filter>` | What the local ffmpeg build supports | Background run of `ffmpeg -hide_banner -encoders` / `-formats` / `-filters` | No | |
 | `<docker-container>`, `<docker-running-container>`, `<docker-image>` | All containers, running containers (with status), tagged images (with size) | Background run of `docker ps -a` / `docker ps` / `docker images` with `--format` | No | The shell's `$DOCKER_HOST`, `-H`, `--context` |
+| `<terraform-workspace>` | `default` plus local workspaces (the selected one is labelled) | `terraform.tfstate.d/*` and `.terraform/environment` in the working directory (or `-chdir`) | No | Workspaces of remote backends, `$TF_WORKSPACE` |
+| `<terraform-var-file>` | `*.tfvars` and `*.tfvars.json` files | The working directory and its immediate subdirectories | No | Deeper or parent directories |
+| `<terraform-resource>` | Resource and instance addresses (`module.x.aws_subnet.s["a"]`) | `resources` in the selected workspace's local state, `terraform.tfstate` or `terraform.tfstate.d/<name>/terraform.tfstate` (16 MiB, 5,000 names). Terraform is never run, since it starts provider plugins. | No | Remote backends, `-state`, a custom local backend `path` |
 
 The Homebrew prefix is the one of the `brew` on the shell's PATH, else `/opt/homebrew`, then `/usr/local`.
 

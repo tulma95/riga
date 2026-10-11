@@ -134,18 +134,24 @@ impl<'a> Json<'a> {
             b'"' => self.string().map(drop),
             b'{' => self.object(&mut |p, _| p.skip_at(depth + 1)),
             b'[' => self.array(&mut |p| p.skip_at(depth + 1)),
-            _ => {
-                // Numbers and literals are skipped unvalidated.
-                let start = self.i;
-                while !matches!(
-                    self.s.get(self.i),
-                    Some(b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r') | None
-                ) {
-                    self.i += 1;
-                }
-                (self.i > start).then_some(())
-            }
+            // Numbers and literals are skipped unvalidated.
+            _ => self.literal().map(drop),
         }
+    }
+    /// The raw text of a number or literal (`12`, `true`, `null`) at the cursor, unvalidated.
+    pub fn literal(&mut self) -> Option<&'a str> {
+        self.ws();
+        let start = self.i;
+        while !matches!(
+            self.s.get(self.i),
+            Some(b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r') | None
+        ) {
+            self.i += 1;
+        }
+        let s = self.s;
+        std::str::from_utf8(&s[start..self.i])
+            .ok()
+            .filter(|t| !t.is_empty())
     }
 }
 #[cfg(test)]
